@@ -1,0 +1,253 @@
+package com.veyon.veyflow.state;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Set;
+
+/**
+ * Represents the state of an agent during execution.
+ * This state is passed between nodes and is fully serializable.
+ */
+public class AgentState {
+    private Map<String, Object> values;
+    private List<ChatMessage> chatMessages;
+    private JsonObject toolCalls;
+    private JsonObject toolResponses;
+    private String currentNode;
+    private String previousNode;
+    private String threadId;
+    private String tenantId;
+
+    /**
+     * Creates a new empty agent state.
+     */
+    public AgentState() {
+        this.values = new HashMap<>();
+        this.chatMessages = new ArrayList<>();
+        this.toolCalls = new JsonObject();
+        this.toolResponses = new JsonObject();
+        this.currentNode = "";
+        this.previousNode = "";
+        this.tenantId = "";
+        this.threadId = "";
+    }
+
+    /**
+     * Creates a new agent state with tenant ID.
+     * 
+     * @param tenantId The tenant ID
+     */
+    public AgentState(String tenantId) {
+        this();
+        this.tenantId = tenantId;
+    }
+
+    /**
+     * Creates a new agent state with tenant ID and thread ID.
+     *
+     * @param tenantId The tenant ID
+     * @param threadId The thread ID for this state instance
+     */
+    public AgentState(String tenantId, String threadId) {
+        this(tenantId);
+        this.threadId = (threadId == null) ? "" : threadId;
+    }
+
+    /**
+     * Get a value from the state.
+     * 
+     * @param key The key for the value
+     * @return The value, or null if not found
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T get(String key) {
+        return (T) values.get(key);
+    }
+
+    /**
+     * Set a value in the state.
+     * 
+     * @param key The key for the value
+     * @param value The value to store
+     * @return This state instance for chaining
+     */
+    public AgentState set(String key, Object value) {
+        values.put(key, value);
+        return this;
+    }
+
+    /**
+     * Get the current chat messages.
+     * 
+     * @return List of chat messages
+     */
+    public List<ChatMessage> getChatMessages() {
+        return chatMessages;
+    }
+
+    /**
+     * Set the chat messages.
+     * 
+     * @param chatMessages List of chat messages
+     * @return This state instance for chaining
+     */
+    public AgentState setChatMessages(List<ChatMessage> chatMessages) {
+        this.chatMessages = chatMessages;
+        return this;
+    }
+
+    /**
+     * Add a new chat message.
+     * 
+     * @param message The chat message to add
+     * @return This state instance for chaining
+     */
+    public AgentState addChatMessage(ChatMessage message) {
+        this.chatMessages.add(message);
+        return this;
+    }
+
+    /**
+     * Get the tool calls.
+     * 
+     * @return Tool calls as JsonObject
+     */
+    public JsonObject getToolCalls() {
+        return toolCalls;
+    }
+
+    /**
+     * Set the tool calls.
+     * 
+     * @param toolCalls Tool calls as JsonObject
+     * @return This state instance for chaining
+     */
+    public AgentState setToolCalls(JsonObject toolCalls) {
+        this.toolCalls = toolCalls;
+        return this;
+    }
+
+    /**
+     * Get the tool responses.
+     * 
+     * @return Tool responses as JsonObject
+     */
+    public JsonObject getToolResponses() {
+        return toolResponses;
+    }
+
+    /**
+     * Set the tool responses.
+     * 
+     * @param toolResponses Tool responses as JsonObject
+     * @return This state instance for chaining
+     */
+    public AgentState setToolResponses(JsonObject toolResponses) {
+        this.toolResponses = toolResponses;
+        return this;
+    }
+
+    /**
+     * Get the current node.
+     * 
+     * @return Current node name
+     */
+    public String getCurrentNode() {
+        return currentNode;
+    }
+
+    /**
+     * Set the current node.
+     * 
+     * @param currentNode Current node name
+     * @return This state instance for chaining
+     */
+    public AgentState setCurrentNode(String currentNode) {
+        this.previousNode = this.currentNode;
+        this.currentNode = currentNode;
+        return this;
+    }
+
+    /**
+     * Get the previous node.
+     * 
+     * @return Previous node name
+     */
+    public String getPreviousNode() {
+        return previousNode;
+    }
+
+    /**
+     * Get the thread ID for this state instance.
+     * 
+     * @return Thread ID
+     */
+    public String getThreadId() {
+        return threadId;
+    }
+
+    /**
+     * Set the thread ID for this state instance.
+     * 
+     * @param threadId Thread ID
+     * @return This state instance for chaining
+     */
+    public AgentState setThreadId(String threadId) {
+        this.threadId = (threadId == null) ? "" : threadId;
+        return this;
+    }
+
+    /**
+     * Get the tenant ID.
+     * 
+     * @return Tenant ID
+     */
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    /**
+     * Set the tenant ID.
+     * 
+     * @param tenantId Tenant ID
+     * @return This state instance for chaining
+     */
+    public AgentState setTenantId(String tenantId) {
+        this.tenantId = tenantId;
+        return this;
+    }
+
+    /**
+     * Serialize the state to JSON.
+     * 
+     * @return JSON representation of the state
+     */
+    public String toJson() {
+        return new Gson().toJson(this);
+    }
+
+    /**
+     * Deserialize the state from JSON.
+     * 
+     * @param json JSON representation of the state
+     * @return The deserialized state
+     */
+    public static AgentState fromJson(String json) {
+        return new Gson().fromJson(json, AgentState.class);
+    }
+    
+    /**
+     * Get all keys in the state.
+     * 
+     * @return Set of keys
+     */
+    public Set<String> getKeys() {
+        return values.keySet();
+    }
+}
