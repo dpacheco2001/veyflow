@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Arrays;
 import java.util.Collections;
 
 @SpringBootTest
@@ -39,7 +40,6 @@ public class AgentConversationTest {
     private OpenAIModelService openAIModelService;
     private GeminiModelService geminiModelService;
     private Map<String, ToolService> registeredToolServices;
-    private Gson gson;
     private ToolAgent toolAgent;
     private AgentState initialState;
 
@@ -48,61 +48,28 @@ public class AgentConversationTest {
         geminiModelService = new GeminiModelService(); 
         registeredToolServices = new HashMap<>();
         registeredToolServices.put(WeatherToolService.class.getName(), new WeatherToolService());
-        gson = new Gson();
 
-        toolAgent = new ToolAgent(geminiModelService, registeredToolServices, GEMINI_MODEL_FOR_NODE, gson);
+        toolAgent = new ToolAgent(geminiModelService, registeredToolServices, GEMINI_MODEL_FOR_NODE);
 
         initialState = new AgentState(TENANT_ID);
     }
 
     @Test
     void testToolAgentWithSpecificToolMethodActivation() {
-        // 1. Setup FoundationModelService (e.g., GeminiModelService)
-        // OpenAIModelService localOpenAIModelService = new OpenAIModelService();
-        // String modelName = OPENAI_MODEL_FOR_NODE; // Or any other suitable model
-
-        // 2. Instantiate WeatherToolService
-        // WeatherToolService weatherService = new WeatherToolService(); 
-        // Map<String, ToolService> registeredToolServices = new HashMap<>();
-        // registeredToolServices.put(WeatherToolService.class.getName(), weatherService);
-
-        // 5. Instantiate ToolAgent
-        // int maxTurns = 5;
-        // ToolAgent toolAgent = new ToolAgent(
-        //     localOpenAIModelService,
-        //     registeredToolServices,
-        //     maxTurns,
-        //     modelName
-        // );
-
-        // 6. Create AgentState and WorkflowConfig
-        // String tenantId = "test-tenant-specific-tool";
-        // AgentState currentState = new AgentState(tenantId); 
-        // currentState.setChatMessages(new ArrayList<>()); // Initialize chat history
-        
         WorkflowConfig workflowConfig = new WorkflowConfig(); 
-        workflowConfig.setEnabledToolServiceClassNames(Collections.singletonList(WeatherToolService.class.getName()));
+        List<String> methodsToActivate = Arrays.asList("getWeather");
+        workflowConfig.activateToolMethods(WeatherToolService.class.getName(), methodsToActivate);
 
-        // 7. Specify nodeRequestedToolNames
-        List<String> nodeRequestedToolNames = Collections.singletonList(WeatherToolService.class.getName());
-        System.out.println("Node Requested Tool Names: " + nodeRequestedToolNames);
-        // 8. User Query
         String userQuery = "What's the weather like in London?";
         
-        // 9. Model Parameters (optional override)
-        ModelParameters modelParamsOverride = new ModelParameters(0.5f, 300);
-
-        // 10. Execute ToolAgent
+        ModelParameters modelParamsOverride = new ModelParameters(0.5f, 300,150);
         AgentTurnResult result = toolAgent.execute(
             initialState,
             userQuery,
             workflowConfig,
-            "You are an assistant that can get weather information.", // System prompt override
-            modelParamsOverride,
-            nodeRequestedToolNames
+            "You are an assistant that can get weather information.",
+            modelParamsOverride
         );
-
-        // 11. Assertions
         assertNotNull(result, "ToolAgentResult should not be null.");
         assertNotNull(result.getFinalMessage(), "Final message should not be null.");
         System.out.println(ANSI_CYAN + "ToolAgent Final Message: " + result.getFinalMessage() + ANSI_RESET);

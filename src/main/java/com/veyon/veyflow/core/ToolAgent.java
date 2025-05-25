@@ -24,6 +24,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class ToolAgent {
 
@@ -34,11 +35,11 @@ public class ToolAgent {
     private final Map<String, ToolService> registeredToolServices; // Assuming this is populated at construction
     private final String modelName;
 
-    public ToolAgent(FoundationModelService foundationModelService, Map<String, ToolService> registeredToolServices, String modelName, Gson gson) {
+    public ToolAgent(FoundationModelService foundationModelService, Map<String, ToolService> registeredToolServices, String modelName) {
         this.foundationModelService = foundationModelService;
         this.registeredToolServices = (registeredToolServices != null) ? new HashMap<>(registeredToolServices) : new HashMap<>();
         this.modelName = modelName;
-        this.gson = gson;
+        this.gson = new Gson();
     }
 
     public AgentTurnResult execute(
@@ -46,8 +47,7 @@ public class ToolAgent {
         String userQuery,
         WorkflowConfig workflowConfig,
         String systemPromptOverride,
-        ModelParameters modelParamsOverride,
-        List<String> nodeRequestedToolNames
+        ModelParameters modelParamsOverride
     ) {
         AgentState currentState = initialState; 
         List<AgentTurnResult.ToolExecutionRecord> allToolExecutionRecords = new ArrayList<>();
@@ -55,11 +55,8 @@ public class ToolAgent {
         int currentToolIteration = 0;
 
         // Determine active tool services and declarations
-        List<ToolService> activeToolServices = determineActiveToolServices(
-            (workflowConfig != null && workflowConfig.getEnabledToolServiceClassNames() != null) ? workflowConfig.getEnabledToolServiceClassNames() : Collections.emptyList(), 
-            nodeRequestedToolNames
-        );
-        List<Tool> functionDeclarations = buildFunctionDeclarations(currentState.getTenantId(), activeToolServices);
+        List<ToolService> activeToolServices = getActiveToolServices(workflowConfig);
+        List<Tool> functionDeclarations = buildFunctionDeclarations(currentState.getTenantId(), activeToolServices, workflowConfig);
 
         if (userQuery != null && !userQuery.isEmpty()) {
             currentState.addChatMessage(new ChatMessage(ChatMessage.Role.USER, userQuery));
@@ -96,24 +93,26 @@ public class ToolAgent {
             );
 
             modelTurnResponse = foundationModelService.generate(modelRequest);
-
-            String assistantContentThisTurn = modelTurnResponse.getAssistantContent();
-            List<ToolCall> toolCallsThisTurn = modelTurnResponse.getToolCalls();
             
-            ChatMessage assistantMessageForHistory = new ChatMessage(ChatMessage.Role.ASSISTANT, assistantContentThisTurn);
-            if (toolCallsThisTurn != null && !toolCallsThisTurn.isEmpty()) {
-                assistantMessageForHistory.setToolCalls(toolCallsThisTurn);
+            // Construct assistant ChatMessage using ModelTurnResponse.getAssistantContent() and setToolCalls().
+            String assistantContent = modelTurnResponse.getAssistantContent();
+            List<ToolCall> toolCallsFromModel = modelTurnResponse.getToolCalls(); // Keep this for clarity or use assistantMessage.getToolCalls() later
+            
+            ChatMessage assistantMessage = new ChatMessage(ChatMessage.Role.ASSISTANT, assistantContent);
+            if (toolCallsFromModel != null && !toolCallsFromModel.isEmpty()) {
+                assistantMessage.setToolCalls(toolCallsFromModel);
             }
-            currentState.addChatMessage(assistantMessageForHistory);
+            currentState.addChatMessage(assistantMessage);
 
+            List<ToolCall> toolCallsThisTurn = modelTurnResponse.getToolCalls(); // Use directly from modelResponse
             if (toolCallsThisTurn == null || toolCallsThisTurn.isEmpty()) {
-                finalAssistantMessage = assistantContentThisTurn;
-                log.info("ToolAgent execute: No tool calls from LLM. Final assistant message received for tenant {}.", currentState.getTenantId());
+                log.info("ToolAgent execute: No tool calls in iteration {}, or max iterations reached. Finalizing. Tenant: {}", currentToolIteration, currentState.getTenantId());
+                finalAssistantMessage = assistantMessage.getContent();
                 break; 
             }
 
             log.info("ToolAgent execute: Detected {} tool calls in iteration {} for tenant {}.", toolCallsThisTurn.size(), currentToolIteration, currentState.getTenantId());
-            List<AgentTurnResult.ToolExecutionRecord> turnExecutionRecords = new ArrayList<>();
+            List<ChatMessage> toolResponses = new ArrayList<>();
 
             for (ToolCall toolCall : toolCallsThisTurn) {
                 String toolArgsJson = toolCall.getParameters() != null ? gson.toJson(toolCall.getParameters()) : "{}";
@@ -123,8 +122,9 @@ public class ToolAgent {
                 String serviceClassNameFromTool = "";
                 String methodNameFromTool = "";
 
+                // Analizamos el nombre de la herramienta asumiendo formato SimpleClassName_MethodName
                 int separatorIndex = fullToolName.lastIndexOf('_');
-                if (separatorIndex == -1) { // Underscore not found, try dot
+                if (separatorIndex == -1) {
                     separatorIndex = fullToolName.lastIndexOf('.');
                 }
 
@@ -132,11 +132,8 @@ public class ToolAgent {
                     serviceClassNameFromTool = fullToolName.substring(0, separatorIndex);
                     methodNameFromTool = fullToolName.substring(separatorIndex + 1);
                 } else {
-                    // If still no valid separator, or format is unexpected, log an error.
-                    // This might happen if the tool name is very short or malformed.
-                    log.error("Could not parse service class name and method name from tool name: '{}'. Expected 'ClassName_MethodName' or 'ClassName.MethodName'.", fullToolName);
-                    // Skip this tool call or handle error appropriately
-                    // For now, let it try to find service/method with empty names, which will likely fail gracefully later.
+                    // Si no hay un separador válido, log error
+                    log.error("Could not parse service class name and method name from tool name: '{}'. Expected 'ClassName_MethodName'.", fullToolName);
                 }
 
                 ToolService service = findToolServiceByClassName(activeToolServices, serviceClassNameFromTool);
@@ -182,14 +179,23 @@ public class ToolAgent {
                     toolExecutionResultContent = "Error: Service for " + toolCall.getName() + " not found or method name invalid.";
                     log.error(toolExecutionResultContent);
                 }
-                turnExecutionRecords.add(new AgentTurnResult.ToolExecutionRecord(toolCall.getName(), toolArgsJson, toolExecutionResultContent));
-                currentState.addChatMessage(new ChatMessage(toolCall.getId(), ChatMessage.Role.TOOL, toolExecutionResultContent));
+                
+                // Use new ChatMessage(toolCall.getId(), ChatMessage.Role.TOOL, toolContent).setToolName() for tool responses.
+                ChatMessage toolResponseMessage = new ChatMessage(toolCall.getId(), ChatMessage.Role.TOOL, toolExecutionResultContent);
+                toolResponseMessage.setToolName(toolCall.getName());
+                toolResponses.add(toolResponseMessage);
+                
+                // Use new AgentTurnResult.ToolExecutionRecord(toolName, args, result) constructor.
+                allToolExecutionRecords.add(new AgentTurnResult.ToolExecutionRecord(toolCall.getName(), toolArgsJson, toolExecutionResultContent));
             }
-            allToolExecutionRecords.addAll(turnExecutionRecords);
+            // Iterate to add multiple tool response ChatMessages to AgentState.
+            for (ChatMessage toolRespMsg : toolResponses) {
+                currentState.addChatMessage(toolRespMsg);
+            }
 
             if (currentToolIteration >= MAX_TOOL_ITERATIONS_PER_EXECUTE) {
                 log.warn("ToolAgent execute: Reached max tool iterations ({}) for tenant {}. Returning current state without further LLM calls.", MAX_TOOL_ITERATIONS_PER_EXECUTE, currentState.getTenantId());
-                finalAssistantMessage = assistantContentThisTurn; // The LLM was about to ask for more tools or give a partial response
+                finalAssistantMessage = assistantMessage.getContent(); // The LLM was about to ask for more tools or give a partial response
                 break;
             }
         } 
@@ -200,44 +206,46 @@ public class ToolAgent {
         return new AgentTurnResult(finalAssistantMessage, currentState.getChatMessages(), allToolExecutionRecords);
     }
 
-    private List<ToolService> determineActiveToolServices(List<String> globallyEnabledToolServiceClassNames, List<String> nodeRequestedToolNames) {
+   private List<ToolService> getActiveToolServices(WorkflowConfig workflowConfig) {
         List<ToolService> availableServices = new ArrayList<>();
-
-        if (nodeRequestedToolNames != null && !nodeRequestedToolNames.isEmpty()) {
-            for (String serviceClassName : nodeRequestedToolNames) {
-                ToolService service = registeredToolServices.get(serviceClassName);
-                if (service != null) { 
-                    availableServices.add(service);
-                    log.debug("Tool service '{}' added (node-requested).", serviceClassName);
-                } else {
-                    log.warn("Node requested tool service '{}' but it is not registered.", serviceClassName);
-                }
-            }
-        } else {
-            for (String serviceClassName : globallyEnabledToolServiceClassNames) {
-                ToolService service = registeredToolServices.get(serviceClassName);
-                if (service != null) {
-                    availableServices.add(service);
-                    log.debug("Tool service '{}' added (globally enabled).", serviceClassName);
-                } else {
-                    log.warn("Globally enabled tool service '{}' but it is not registered.", serviceClassName);
-                }
+        
+        // Si no hay workflowConfig, no hay servicios activos
+        if (workflowConfig == null) {
+            log.debug("No WorkflowConfig provided, no tool services are active.");
+            return availableServices;
+        }
+        
+        // Obtener los servicios activos desde el WorkflowConfig
+        Set<String> activeServiceClassNames = workflowConfig.getActiveServiceClassNames();
+        for (String serviceClassName : activeServiceClassNames) {
+            ToolService service = registeredToolServices.get(serviceClassName);
+            if (service != null) {
+                availableServices.add(service);
+                log.debug("Tool service '{}' added (active in WorkflowConfig).", serviceClassName);
+            } else {
+                log.warn("Service '{}' is active in WorkflowConfig but not registered.", serviceClassName);
             }
         }
         return availableServices;
     }
 
-    private List<Tool> buildFunctionDeclarations(String tenantId, List<ToolService> activeToolServices) {
+    private List<Tool> buildFunctionDeclarations(String tenantId, List<ToolService> activeToolServices, WorkflowConfig workflowConfig) {
         List<Tool> functionDeclarations = new ArrayList<>();
         for (ToolService service : activeToolServices) {
             Class<?> serviceClass = service.getClass();
-            String serviceClassName = serviceClass.getSimpleName();
+            String serviceFQN = serviceClass.getName();
 
             for (Method method : serviceClass.getDeclaredMethods()) {
                 if (method.isAnnotationPresent(ToolAnnotation.class)) {
+                    // Verificar si el método está activo en workflowConfig
+                    if (workflowConfig != null && !workflowConfig.isToolMethodActive(serviceFQN, method.getName())) {
+                        log.debug("Skipping tool declaration for method {} in service {} as it's not active in WorkflowConfig for tenant {}.", method.getName(), serviceFQN, tenantId);
+                        continue;
+                    }
+                    
                     ToolAnnotation toolAnnotation = method.getAnnotation(ToolAnnotation.class);
                     Tool function = new Tool();
-                    function.setName(serviceClassName + "_" + method.getName());
+                    function.setName(serviceClass.getSimpleName() + "_" + method.getName());
                     function.setDescription(toolAnnotation.value()); 
 
                     List<Parameter> parametersList = new ArrayList<>();
@@ -268,6 +276,16 @@ public class ToolAgent {
                 return service;
             }
         }
+        
+        // Intentar buscar por nombre completo como fallback
+        for (ToolService service : services) {
+            if (service.getClass().getName().equals(className)) {
+                log.debug("Found service by fully qualified name instead of simple name: {}", className);
+                return service;
+            }
+        }
+        
+        log.warn("Service with class name '{}' not found in active services list", className);
         return null;
     }
 }
