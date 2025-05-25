@@ -1,8 +1,11 @@
 package com.veyon.veyflow.state;
 
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import com.veyon.veyflow.tools.ToolCall;
 
 /**
  * Represents a chat message in the agent framework.
@@ -23,6 +26,7 @@ public class ChatMessage {
     private ZonedDateTime timestamp;
     private String toolName;
     private String toolResponse;
+    private List<ToolCall> toolCalls;
 
     /**
      * Creates a new chat message.
@@ -35,6 +39,7 @@ public class ChatMessage {
         this.content = content;
         this.metadata = new HashMap<>();
         this.timestamp = ZonedDateTime.now();
+        this.toolCalls = new ArrayList<>();
     }
 
     /**
@@ -212,6 +217,26 @@ public class ChatMessage {
      */
     public ChatMessage setToolResponse(String toolResponse) {
         this.toolResponse = toolResponse;
+        return this;
+    }
+
+    /**
+     * Gets the list of tool calls associated with this message (usually for assistant messages).
+     * 
+     * @return A list of ToolCall objects, or an empty list if none.
+     */
+    public List<ToolCall> getToolCalls() {
+        return toolCalls;
+    }
+
+    /**
+     * Sets the list of tool calls for this message.
+     * 
+     * @param toolCalls A list of ToolCall objects.
+     * @return This message instance for chaining.
+     */
+    public ChatMessage setToolCalls(List<ToolCall> toolCalls) {
+        this.toolCalls = toolCalls;
         return this;
     }
 }

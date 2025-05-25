@@ -2,13 +2,11 @@ package com.veyon.veyflow.foundationmodels;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.google.gson.JsonSyntaxException;
 import com.veyon.veyflow.foundationmodels.adapters.ModelRequestAdapter;
 import com.veyon.veyflow.foundationmodels.adapters.OpenAiRequestAdapter;
+import com.veyon.veyflow.foundationmodels.adapters.OpenAiResponseAdapter;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +44,7 @@ public class OpenAIModelService implements FoundationModelService {
     private final Gson gson;
     private final String apiKey;
     private final ModelRequestAdapter requestAdapter;
+    private final OpenAiResponseAdapter responseAdapter;
 
     public OpenAIModelService() {
         this.apiKey = System.getenv(OPENAI_API_KEY_ENV_VAR);
@@ -65,6 +64,7 @@ public class OpenAIModelService implements FoundationModelService {
                 .build();
         this.gson = new GsonBuilder().create();
         this.requestAdapter = new OpenAiRequestAdapter();
+        this.responseAdapter = new OpenAiResponseAdapter();
     }
 
     public OpenAIModelService(String apiKey, OkHttpClient httpClient, Gson gson) {
@@ -80,6 +80,7 @@ public class OpenAIModelService implements FoundationModelService {
         this.httpClient = httpClient;
         this.gson = gson;
         this.requestAdapter = requestAdapter;
+        this.responseAdapter = new OpenAiResponseAdapter();
 
         if (log.isInfoEnabled()) {
             log.info("OpenAI API Key: [REDACTED]");
@@ -112,7 +113,7 @@ public class OpenAIModelService implements FoundationModelService {
     }
 
     @Override
-    public String generate(ModelRequest modelRequest) {
+    public ModelTurnResponse generate(ModelRequest modelRequest) {
         if (modelRequest.contents() == null || modelRequest.contents().size() == 0) {
             log.error("[CRITICAL] contents is null or empty. Cannot make OpenAI API call.");
             log.error("[DEBUG-DIAGNOSTIC] Details: contents={}, functionDeclarations={}, temperature={}",
@@ -127,6 +128,7 @@ public class OpenAIModelService implements FoundationModelService {
         
         // Usar el adaptador para construir el cuerpo de la solicitud
         JsonObject payload = requestAdapter.adaptRequest(enhancedRequest);
+        log.info("[OpenAIModelService.generate] Payload received from adapter. HashCode: {}, Content: {}", System.identityHashCode(payload), payload.toString()); // DIAGNOSTIC LOG
         
         // Determinar el nombre del modelo a usar
         String effectiveModelName = enhancedRequest.modelName() != null && !enhancedRequest.modelName().isBlank() 
@@ -141,7 +143,8 @@ public class OpenAIModelService implements FoundationModelService {
         
         // Handle additionalConfig if present
         // Check if there's an additionalConfig object and handle it appropriately
-        if (modelRequest.additionalConfig() != null) {
+        if (modelRequest.additionalConfig() != null && !modelRequest.additionalConfig().isEmpty()) { // Check isEmpty for safety
+            log.info("[OpenAIModelService.generate] Processing additionalConfig as it is not null or empty."); // DIAGNOSTIC LOG
             Object additionalConfig = modelRequest.additionalConfig();
             
             // If additionalConfig is a Map<String, Object>, process its entries
@@ -157,8 +160,11 @@ public class OpenAIModelService implements FoundationModelService {
                     }
                 }
             }
+        } else {
+            log.info("[OpenAIModelService.generate] Skipping additionalConfig as it is null or empty."); // DIAGNOSTIC LOG
         }
 
+        log.info("[OpenAIModelService.generate] Payload BEFORE gson.toJson(). HashCode: {}, Content: {}", System.identityHashCode(payload), payload.toString()); // DIAGNOSTIC LOG
         String jsonPayload = gson.toJson(payload);
         if (verbose) {
             log.debug(BLUE + "[OpenAIModelService.generate] Request payload: " + RESET + "\n" +
@@ -213,48 +219,7 @@ public class OpenAIModelService implements FoundationModelService {
                                  (responseBodyString.length() > 500 ? "..." : ""));
                     }
 
-                    try {
-                        JsonObject jsonResponse = JsonParser.parseString(responseBodyString).getAsJsonObject();
-                        if (jsonResponse.has("choices") && jsonResponse.getAsJsonArray("choices").size() > 0) {
-                            JsonObject choice = jsonResponse.getAsJsonArray("choices").get(0).getAsJsonObject();
-                            
-                            if (choice.has("message")) {
-                                JsonObject message = choice.getAsJsonObject("message");
-                                JsonElement contentElement = message.get("content");
-                                String textContent = null;
-
-                                if (contentElement != null && !contentElement.isJsonNull()) {
-                                    textContent = contentElement.getAsString();
-                                }
-
-                                // If there's text content, return it.
-                                if (textContent != null) {
-                                    return textContent.trim();
-                                }
-
-                                // If content is null, BUT there are tool_calls (either in message or by finish_reason),
-                                // the ModelNode expects the full JSON string to parse tool_calls.
-                                boolean hasToolCallsInMessage = message.has("tool_calls") && message.getAsJsonArray("tool_calls").size() > 0;
-                                boolean finishReasonIsToolCalls = choice.has("finish_reason") && "tool_calls".equals(choice.get("finish_reason").getAsString());
-
-                                if (hasToolCallsInMessage || finishReasonIsToolCalls) {
-                                    return responseBodyString; // Return the full JSON string which includes tool_calls
-                                }
-                                
-                                // If content is null and no tool calls, model provided no text and no actions.
-                                // Return empty string to avoid JsonNull issues downstream.
-                                log.warn("[OpenAIModelService.generate] Response message content is null and no tool_calls found. Choice: {}", choice.toString());
-                                return ""; 
-                            } else {
-                                // Fallback if 'message' object is missing, though unlikely with valid API responses.
-                                log.warn("[OpenAIModelService.generate] 'message' object missing in choice. Choice: {}", choice.toString());
-                                return responseBodyString; // Or return an error/empty string
-                            }
-                        }
-                    } catch (JsonSyntaxException e) {
-                        log.error("Failed to parse OpenAI API JSON response: {}", e.getMessage());
-                    }
-                    return responseBodyString;
+                    return responseAdapter.parseResponse(responseBodyString);
                 }
                 
                 log.error(RED + "[ERROR] HTTP {} (Attempt {}): {}" + RESET, response.code(), attempt, responseBodyString);

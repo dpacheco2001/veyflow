@@ -1,7 +1,10 @@
 package com.veyon.veyflow.foundationmodels;
 
 import com.google.gson.JsonArray;
+import com.veyon.veyflow.state.ChatMessage;
+import com.veyon.veyflow.tools.Tool;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,25 +16,25 @@ public interface FoundationModelService {
      * Generates a response from a foundation model based on the provided request.
      *
      * @param request the request containing the model name, system instruction, contents, function declarations, parameters, and additional configuration
-     * @return the generated response as a string
+     * @return the generated response as a ModelTurnResponse object
      */
-    String generate(ModelRequest request);
+    ModelTurnResponse generate(ModelRequest request);
 
     /**
      * ModelRequest is a record that represents a request to a foundation model.
      *
      * @param modelName the name of the foundation model
      * @param systemInstruction the system instruction for the model
-     * @param contents the contents of the request, represented as a JSON array
-     * @param functionDeclarations the function declarations for the model, represented as a JSON array
+     * @param contents the contents of the request, represented as a list of ChatMessage objects
+     * @param functionDeclarations the function declarations for the model, represented as a list of Tool objects
      * @param parameters the parameters for the model
      * @param additionalConfig additional configuration for the model
      */
     record ModelRequest(
         String modelName,
         String systemInstruction, 
-        JsonArray contents, 
-        JsonArray functionDeclarations, 
+        List<ChatMessage> contents, 
+        List<Tool> functionDeclarations, 
         ModelParameters parameters, 
         Map<String, Object> additionalConfig 
     ) {

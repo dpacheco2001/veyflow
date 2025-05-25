@@ -5,7 +5,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
+import com.veyon.veyflow.foundationmodels.ModelTurnResponse;
 import com.veyon.veyflow.state.ChatMessage;
+import com.veyon.veyflow.tools.ToolCall;
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +19,74 @@ import org.slf4j.LoggerFactory;
 public class OpenAiResponseAdapter implements ModelResponseAdapter {
     private static final Logger log = LoggerFactory.getLogger(OpenAiResponseAdapter.class);
     
+    private String transformNameToCanonical(String openAiName) {
+        if (openAiName == null) {
+            return null;
+        }
+        // Assuming the primary transformation was '.' to '_'.
+        // If other characters were stripped by transformNameForOpenAI, 
+        // reversing that perfectly might be complex and context-dependent.
+        // For now, we only reverse the dot-underscore transformation.
+        return openAiName.replace('_', '.');
+    }
+
+    @Override
+    public ModelTurnResponse parseResponse(String rawJsonResponseString) {
+        String assistantContent = null;
+        List<ToolCall> toolCalls = new ArrayList<>();
+
+        if (rawJsonResponseString == null || rawJsonResponseString.trim().isEmpty()) {
+            log.warn("OpenAI response string is null or empty.");
+            return new ModelTurnResponse(null, toolCalls);
+        }
+
+        try {
+            JsonObject responseJson = JsonParser.parseString(rawJsonResponseString.trim()).getAsJsonObject();
+            assistantContent = extractTextContent(responseJson); // Use existing method
+
+            if (responseJson.has("choices") && responseJson.getAsJsonArray("choices").size() > 0) {
+                JsonObject message = responseJson.getAsJsonArray("choices")
+                    .get(0).getAsJsonObject()
+                    .getAsJsonObject("message");
+
+                if (message.has("tool_calls") && message.get("tool_calls").isJsonArray()) {
+                    JsonArray toolCallsJsonArray = message.getAsJsonArray("tool_calls");
+                    for (JsonElement toolCallElement : toolCallsJsonArray) {
+                        JsonObject toolCallJson = toolCallElement.getAsJsonObject();
+                        String id = toolCallJson.has("id") ? toolCallJson.get("id").getAsString() : null;
+                        String type = toolCallJson.has("type") ? toolCallJson.get("type").getAsString() : null;
+                        
+                        if ("function".equals(type) && toolCallJson.has("function")) {
+                            JsonObject functionJson = toolCallJson.getAsJsonObject("function");
+                            String openAiName = functionJson.has("name") ? functionJson.get("name").getAsString() : null;
+                            String canonicalName = transformNameToCanonical(openAiName); // Apply reverse transformation
+                            String arguments = functionJson.has("arguments") ? functionJson.get("arguments").getAsString() : null;
+
+                            if (id != null && canonicalName != null && arguments != null) {
+                                // Convert arguments string to JsonObject for ToolCall constructor
+                                JsonObject argsObject = JsonParser.parseString(arguments).getAsJsonObject();
+                                toolCalls.add(new ToolCall(id, canonicalName, argsObject));
+                            } else {
+                                log.warn("Skipping tool call due to missing id, name (original: {}), or arguments: {}", openAiName, toolCallJson);
+                            }
+                        } else {
+                            log.warn("Skipping non-function tool call or malformed function call: {}", toolCallJson);
+                        }
+                    }
+                }
+            }
+        } catch (JsonSyntaxException e) {
+            log.error("Failed to parse OpenAI JSON response: {}. Raw response: [{}...]", e.getMessage(), rawJsonResponseString.substring(0, Math.min(rawJsonResponseString.length(), 200)));
+            // Return with any content/tool_calls parsed so far, or null/empty if parsing failed early
+            return new ModelTurnResponse(assistantContent, toolCalls); 
+        } catch (Exception e) {
+            log.error("Unexpected error parsing OpenAI response: {}. Raw response: [{}...]", e.getMessage(), rawJsonResponseString.substring(0, Math.min(rawJsonResponseString.length(), 200)), e);
+            return new ModelTurnResponse(assistantContent, toolCalls); // Graceful degradation
+        }
+
+        return new ModelTurnResponse(assistantContent, toolCalls);
+    }
+
     @Override
     public String extractTextContent(JsonObject response) {
         try {

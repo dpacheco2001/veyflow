@@ -1,10 +1,8 @@
 package com.veyon.veyflow.foundationmodels;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonSyntaxException;
 import com.veyon.veyflow.foundationmodels.adapters.GeminiRequestAdapter;
+import com.veyon.veyflow.foundationmodels.adapters.GeminiResponseAdapter;
 import com.veyon.veyflow.foundationmodels.adapters.ModelRequestAdapter;
 import okhttp3.*;
 import org.slf4j.Logger;
@@ -15,7 +13,9 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
+import java.util.ArrayList;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -38,41 +38,39 @@ public class GeminiModelService implements FoundationModelService {
     private static final String DEFAULT_SYSTEM_INSTRUCTION = "Eres un asistente útil y amigable.";
 
     private final OkHttpClient httpClient;
-    private final Gson gson;
     private final String apiKey;
     private final ModelRequestAdapter requestAdapter;
+    private final GeminiResponseAdapter responseAdapter;
 
     public GeminiModelService() {
-        this.apiKey = System.getenv(GOOGLE_API_KEY_ENV_VAR);
-        if (this.apiKey == null || this.apiKey.trim().isEmpty()) {
-            log.error("Google API Key not found in environment variable: {}", GOOGLE_API_KEY_ENV_VAR);
-            throw new IllegalStateException("Google API Key (GOOGLE_API_KEY) is not configured.");
+        this.apiKey = System.getenv(GOOGLE_API_KEY_ENV_VAR); // Corrected Env Var
+        if (this.apiKey == null || this.apiKey.isEmpty()) {
+            String errorMessage = "[CRITICAL] Gemini API key not found in environment variable " + GOOGLE_API_KEY_ENV_VAR;
+            log.error(errorMessage);
         }
-
         this.httpClient = new OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .build();
-        this.gson = new GsonBuilder().create();
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build();
         this.requestAdapter = new GeminiRequestAdapter();
+        this.responseAdapter = new GeminiResponseAdapter();
     }
 
-    public GeminiModelService(String apiKey, OkHttpClient httpClient, Gson gson) {
-        this(apiKey, httpClient, gson, new GeminiRequestAdapter());
-    }
-    
-    public GeminiModelService(String apiKey, OkHttpClient httpClient, Gson gson, ModelRequestAdapter requestAdapter) {
+    public GeminiModelService(String apiKey, OkHttpClient httpClient, ModelRequestAdapter requestAdapter, GeminiResponseAdapter responseAdapter) {
         Objects.requireNonNull(apiKey, "apiKey cannot be null");
         Objects.requireNonNull(httpClient, "httpClient cannot be null");
-        Objects.requireNonNull(gson, "gson cannot be null");
         Objects.requireNonNull(requestAdapter, "requestAdapter cannot be null");
+        Objects.requireNonNull(responseAdapter, "responseAdapter cannot be null");
         this.apiKey = apiKey;
         this.httpClient = httpClient;
-        this.gson = gson;
         this.requestAdapter = requestAdapter;
+        this.responseAdapter = responseAdapter;
     }
-    
+
+    public GeminiModelService(String apiKey, OkHttpClient httpClient, ModelRequestAdapter requestAdapter) {
+        this(apiKey, httpClient, requestAdapter, new GeminiResponseAdapter()); // Pass null for gson or remove if not needed
+    }
 
     private ModelRequest enrichModelRequest(ModelRequest modelRequest) {
         String systemInstruction = modelRequest.systemInstruction();
@@ -101,53 +99,33 @@ public class GeminiModelService implements FoundationModelService {
     }
 
     @Override
-    public String generate(ModelRequest modelRequest) {
-        if (modelRequest.contents() == null || modelRequest.contents().size() == 0) {
-            log.error("[CRITICAL] contents is null or empty. Cannot make Gemini API call.");
-            log.error("[DEBUG-DIAGNOSTIC] Details: contents={}, functionDeclarations={}, temperature={}",
-                    modelRequest.contents() != null ? "size 0" : "null",
-                    modelRequest.functionDeclarations() != null ? modelRequest.functionDeclarations().size() + " declarations" : "null",
-                    modelRequest.parameters() != null ? modelRequest.parameters().temperature() : "N/A");
-            throw new IllegalArgumentException("contents cannot be null or empty for the Gemini API");
-        }
-
-        // Preparar el modelRequest con instrucciones adicionales si es necesario
+    public ModelTurnResponse generate(ModelRequest modelRequest) {
         ModelRequest enrichedRequest = enrichModelRequest(modelRequest);
-        
-        // Usar el adaptador para construir el cuerpo de la solicitud
         String modelToUse = (enrichedRequest.modelName() != null && !enrichedRequest.modelName().isEmpty()) 
                             ? enrichedRequest.modelName() 
                             : DEFAULT_GEMINI_MODEL_NAME;
-        
-        String endpointUrl = requestAdapter.buildEndpointUrl(modelToUse);
+
+        String endpoint = API_BASE_URL + modelToUse + ":generateContent?key=" + this.apiKey;
         JsonObject payload = requestAdapter.adaptRequest(enrichedRequest);
-        JsonObject headersJson = requestAdapter.getRequestHeaders(this.apiKey);
 
-        // --- BEGIN DEBUG LOGS ---
-        log.info("[GeminiModelService.generate] Attempting to call Gemini API.");
-        log.info("[GeminiModelService.generate] Endpoint URL: {}", endpointUrl);
-        if (this.apiKey != null && !this.apiKey.isEmpty()) {
-            String apiKeyStart = this.apiKey.substring(0, Math.min(5, this.apiKey.length()));
-            String apiKeyEnd = this.apiKey.substring(Math.max(0, this.apiKey.length() - 5));
-            log.info("[GeminiModelService.generate] API Key (partial): Starts with '{}', Ends with '{}'", apiKeyStart, apiKeyEnd);
-        } else {
-            log.error("[GeminiModelService.generate] API Key is NULL or EMPTY when preparing request!");
+        if (verbose) {
+            log.info(YELLOW + "[Gemini Payload Sent]:\n" + payload.toString() + RESET);
         }
-        // --- END DEBUG LOGS ---
 
-        MediaType JSON = MediaType.get("application/json; charset=utf-8");
-        RequestBody body = RequestBody.create(payload.toString(), JSON);
+        RequestBody body = RequestBody.create(payload.toString(), MediaType.get("application/json; charset=utf-8"));
         
-        // Obtener los headers del adaptador
-        okhttp3.Request.Builder requestBuilder = new okhttp3.Request.Builder()
-            .url(endpointUrl)
-            .post(body);
-        
-        // Agregar los headers
-        if (headersJson != null) {
-            for (String headerName : headersJson.keySet()) {
-                if (headersJson.get(headerName).isJsonPrimitive()) {
-                    requestBuilder.addHeader(headerName, headersJson.get(headerName).getAsString());
+        // Prepare request headers from the enriched ModelRequest if available
+        Request.Builder requestBuilder = new Request.Builder().url(endpoint).post(body);
+        // Access _requestHeaders from additionalConfig map
+        Map<String, Object> additionalConfigMap = enrichedRequest.additionalConfig(); 
+        if (additionalConfigMap != null && additionalConfigMap.containsKey("_requestHeaders")) {
+            Object headersObj = additionalConfigMap.get("_requestHeaders");
+            if (headersObj instanceof JsonObject) {
+                JsonObject headersJson = (JsonObject) headersObj;
+                for (String headerName : headersJson.keySet()) {
+                    if (headersJson.get(headerName).isJsonPrimitive()) {
+                        requestBuilder.addHeader(headerName, headersJson.get(headerName).getAsString());
+                    }
                 }
             }
         }
@@ -164,70 +142,51 @@ public class GeminiModelService implements FoundationModelService {
                     if (verbose) log.info(BLUE + "[HTTP] Response:\n" + responseBodyString + RESET);
                     if (responseBodyString == null || responseBodyString.trim().isEmpty()) {
                         log.warn("Gemini API returned successful but empty body.");
-                        return "{\"error\": {\"message\": \"Empty response from model\"}}"; 
+                        // Return a ModelTurnResponse with an error message or empty content
+                        return new ModelTurnResponse("Error: Empty response from model", new ArrayList<>()); 
                     }
-                    // Check for API-level errors or blocked prompts within the JSON response
-                    try {
-                        JsonObject jsonResponse = gson.fromJson(responseBodyString, JsonObject.class);
-                        if (jsonResponse.has("error")) {
-                            log.error("Gemini API returned an error in response body: {}", jsonResponse.get("error").toString());
-                        }
-                        if (jsonResponse.has("promptFeedback")) {
-                            JsonObject promptFeedback = jsonResponse.getAsJsonObject("promptFeedback");
-                            if (promptFeedback.has("blockReason")) {
-                                String blockReason = promptFeedback.get("blockReason").getAsString();
-                                log.warn("Gemini API blocked prompt. Reason: {}", blockReason);
-                                // Return a structured error as per original intent, but let's ensure it's valid JSON string
-                                JsonObject errorPayload = new JsonObject();
-                                JsonObject errorDetail = new JsonObject();
-                                errorDetail.addProperty("message", "Prompt blocked by API due to: " + blockReason);
-                                errorDetail.addProperty("blockReason", blockReason);
-                                errorPayload.add("error", errorDetail);
-                                return gson.toJson(errorPayload);
-                            }
-                        }
-                    } catch (JsonSyntaxException e) {
-                        log.error("Failed to parse Gemini API JSON response: {}", e.getMessage());
-                    }
-                    return responseBodyString;
+                    // Use the response adapter to parse the response body into ModelTurnResponse
+                    return responseAdapter.parseResponse(responseBodyString);
                 }
                 
                 log.error(RED + "[ERROR] HTTP {} (Attempt {}): {}" + RESET, response.code(), attempt, responseBodyString);
-                // Retry logic based on original: 500 errors or specific client errors like 429
-                // OkHttp doesn't throw IOException for HTTP error codes directly like HttpURLConnection does for getErrorStream()
                 if ((response.code() == 500 || response.code() == 429) && attempt < MAX_RETRIES) {
                     log.warn(YELLOW + "[WARN] HTTP {} on attempt {}. Retrying in {} seconds... Response: {}" + RESET, 
                              response.code(), attempt, (currentDelayMs / 1000), responseBodyString);
                     Thread.sleep(currentDelayMs);
-                    // currentDelayMs *= 2; // Exponential backoff, original used fixed delay
                 } else {
-                    throw new IOException("Gemini API request failed with HTTP code: " + response.code() + ". Body: " + responseBodyString);
+                    // For non-retryable errors or last attempt, return ModelTurnResponse with error
+                    String errorMessage = "Gemini API request failed with HTTP code: " + response.code() + ". Body: " + responseBodyString;
+                    return new ModelTurnResponse(errorMessage, new ArrayList<>());
                 }
 
-            } catch (IOException e) { // Catches network issues, timeouts from OkHttp, or the re-thrown above
+            } catch (IOException e) { 
                 log.error(YELLOW + "[WARN] IOException on attempt {}: {}." + RESET, attempt, e.getMessage());
                 if (attempt < MAX_RETRIES) {
                     log.info("Retrying in {} ms...", currentDelayMs);
                     try {
                         Thread.sleep(currentDelayMs);
-                        // currentDelayMs *= 2;
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         log.error(RED + "[ERROR] Thread interrupted during retry delay." + RESET);
-                        throw new RuntimeException("Thread interrupted during Gemini API retry delay", ie);
+                        String errorMessage = "Thread interrupted during Gemini API retry delay: " + ie.getMessage();
+                        return new ModelTurnResponse(errorMessage, new ArrayList<>());
                     }
                 } else {
                     log.error(RED + "[ERROR] IOException after {} attempts: {} " + RESET, attempt, e.getMessage());
-                    throw new RuntimeException("Gemini API request failed after " + attempt + " attempts due to IOException: " + e.getMessage(), e);
+                    String errorMessage = "Gemini API request failed after " + attempt + " attempts due to IOException: " + e.getMessage();
+                    return new ModelTurnResponse(errorMessage, new ArrayList<>());
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.error(RED + "[ERROR] Thread interrupted during retry delay for Gemini API call." + RESET);
-                throw new RuntimeException("Gemini API call retry interrupted.", e);
+                String errorMessage = "Gemini API call retry interrupted: " + e.getMessage();
+                return new ModelTurnResponse(errorMessage, new ArrayList<>());
             }
-        } // End of retry loop
+        } 
 
         log.error(RED + "[ERROR] Gemini call failed definitively after {} attempts." + RESET, MAX_RETRIES);
-        throw new RuntimeException("Gemini API call failed after " + MAX_RETRIES + " attempts.");
+        String finalErrorMessage = "Gemini API call failed after " + MAX_RETRIES + " attempts.";
+        return new ModelTurnResponse(finalErrorMessage, new ArrayList<>());
     }
 }

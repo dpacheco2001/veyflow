@@ -5,8 +5,12 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
+import com.veyon.veyflow.foundationmodels.ModelTurnResponse;
 import com.veyon.veyflow.state.ChatMessage;
+import com.veyon.veyflow.tools.ToolCall;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,6 +19,76 @@ import org.slf4j.LoggerFactory;
  */
 public class GeminiResponseAdapter implements ModelResponseAdapter {
     private static final Logger log = LoggerFactory.getLogger(GeminiResponseAdapter.class);
+
+    @Override
+    public ModelTurnResponse parseResponse(String rawJsonResponseString) {
+        String assistantContent = null;
+        List<ToolCall> toolCalls = new ArrayList<>();
+
+        if (rawJsonResponseString == null || rawJsonResponseString.trim().isEmpty()) {
+            log.warn("Gemini response string is null or empty.");
+            return new ModelTurnResponse(null, toolCalls);
+        }
+
+        try {
+            JsonObject responseJson = JsonParser.parseString(rawJsonResponseString.trim()).getAsJsonObject();
+            
+            if (responseJson.has("candidates") && responseJson.getAsJsonArray("candidates").size() > 0) {
+                JsonObject candidate = responseJson.getAsJsonArray("candidates").get(0).getAsJsonObject();
+                if (candidate.has("content") && candidate.getAsJsonObject("content").has("parts")) {
+                    JsonArray parts = candidate.getAsJsonObject("content").getAsJsonArray("parts");
+                    for (JsonElement partElement : parts) {
+                        if (partElement.isJsonObject()) {
+                            JsonObject partJson = partElement.getAsJsonObject();
+                            // Extract text content
+                            if (partJson.has("text")) {
+                                if (assistantContent == null) { // Take the first text part found
+                                    assistantContent = partJson.get("text").getAsString();
+                                } else {
+                                    // Append if multiple text parts exist, though usually there's one primary one or one per tool_call response.
+                                    // For now, ToolAgent expects a single assistant content string if not making tool calls.
+                                    log.debug("Multiple text parts found in Gemini response, appending. This might need specific handling.");
+                                    assistantContent += "\n" + partJson.get("text").getAsString();
+                                }
+                            }
+
+                            // Extract function call
+                            if (partJson.has("functionCall")) {
+                                JsonObject functionCallJson = partJson.getAsJsonObject("functionCall");
+                                String name = functionCallJson.has("name") ? functionCallJson.get("name").getAsString() : null;
+                                JsonObject args = null;
+                                if (functionCallJson.has("args") && functionCallJson.get("args").isJsonObject()) {
+                                    args = functionCallJson.getAsJsonObject("args");
+                                } else if (functionCallJson.has("args") && functionCallJson.get("args").isJsonPrimitive() && functionCallJson.get("args").getAsJsonPrimitive().isString()) {
+                                    // Sometimes args might be a stringified JSON, try to parse it
+                                    try {
+                                        args = JsonParser.parseString(functionCallJson.get("args").getAsString()).getAsJsonObject();
+                                    } catch (JsonSyntaxException e) {
+                                        log.warn("Could not parse functionCall arguments string for Gemini: {}", functionCallJson.get("args").getAsString(), e);
+                                    }
+                                }
+                                
+                                if (name != null && args != null) {
+                                    String toolCallId = UUID.randomUUID().toString(); // Gemini doesn't provide a tool_call_id in the request like OpenAI
+                                    toolCalls.add(new ToolCall(toolCallId, name, args));
+                                } else {
+                                    log.warn("Skipping Gemini functionCall due to missing name or arguments: {}", functionCallJson);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (JsonSyntaxException e) {
+            log.error("Failed to parse Gemini JSON response: {}. Raw response: [{}...]", e.getMessage(), rawJsonResponseString.substring(0, Math.min(rawJsonResponseString.length(), 200)));
+            return new ModelTurnResponse(assistantContent, toolCalls);
+        } catch (Exception e) {
+            log.error("Unexpected error parsing Gemini response: {}. Raw response: [{}...]", e.getMessage(), rawJsonResponseString.substring(0, Math.min(rawJsonResponseString.length(), 200)), e);
+            return new ModelTurnResponse(assistantContent, toolCalls);
+        }
+        // If only tool calls were made, assistantContent might be null. This is fine.
+        return new ModelTurnResponse(assistantContent, toolCalls);
+    }
     
     @Override
     public String extractTextContent(JsonObject response) {

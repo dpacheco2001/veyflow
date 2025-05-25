@@ -2,6 +2,7 @@ package com.veyon.veyflow.foundationmodels.adapters;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.veyon.veyflow.foundationmodels.ModelTurnResponse;
 import java.util.List;
 import com.veyon.veyflow.state.ChatMessage;
 
@@ -11,6 +12,14 @@ import com.veyon.veyflow.state.ChatMessage;
  */
 public interface ModelResponseAdapter {
     
+    /**
+     * Parses the raw JSON response string from the model into a standardized ModelTurnResponse object.
+     * 
+     * @param rawJsonResponseString The raw JSON string from the HTTP response.
+     * @return A ModelTurnResponse object containing the assistant's content and any tool calls.
+     */
+    ModelTurnResponse parseResponse(String rawJsonResponseString);
+
     /**
      * Extract the text content from a model response.
      * 

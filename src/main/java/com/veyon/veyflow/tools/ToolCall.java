@@ -1,6 +1,11 @@
 package com.veyon.veyflow.tools;
 
+import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.google.gson.reflect.TypeToken;
+import java.lang.reflect.Type;
+import java.util.Collections;
+import java.util.Map;
 
 /**
  * Represents a tool/function call from a model response.
@@ -49,5 +54,17 @@ public class ToolCall {
      */
     public JsonObject getParameters() {
         return parameters;
+    }
+    
+    /**
+     * Converts the JsonObject parameters to a Map<String, Object>.
+     * @return A map representation of the parameters, or an empty map if parameters are null.
+     */
+    public Map<String, Object> getParametersAsMap() {
+        if (this.parameters == null) {
+            return Collections.emptyMap();
+        }
+        Type type = new TypeToken<Map<String, Object>>() {}.getType();
+        return new Gson().fromJson(this.parameters, type);
     }
 }
