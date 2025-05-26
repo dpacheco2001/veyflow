@@ -77,7 +77,6 @@ public class RoutersTesting {
         EchoNode entryNode = new EchoNode("entry");
         EchoNode nodeA = new EchoNode("nodeA");
         EchoNode nodeB = new EchoNode("nodeB");
-        EchoNode nodeC = new EchoNode("nodeC");
         EchoNode joinNode = new EchoNode("joinNode");
 
         // Initialize workflow here with the specific entry node for this test
@@ -122,7 +121,6 @@ public class RoutersTesting {
         assertTrue(executionPath.contains("joinNode_output"), "JoinNode should have run");
         
         assertEquals("joinNode_output", executionPath.get(executionPath.size() - 1), "JoinNode_output should be the last element");
-        // Check order: entry first, joinNode last. A and B can be in any order in between.
         assertEquals("entry_output", executionPath.get(0), "Entry_output should be the first element");
         assertTrue(executionPath.indexOf("nodeA_output") < executionPath.indexOf("joinNode_output"), "nodeA should run before joinNode");
         assertTrue(executionPath.indexOf("nodeB_output") < executionPath.indexOf("joinNode_output"), "nodeB should run before joinNode");
@@ -225,5 +223,131 @@ public class RoutersTesting {
         assertEquals("entry_output", executionPathC.get(0), "[C] Entry_output should be the first element");
         assertTrue(executionPathC.indexOf("nodeA_output") < executionPathC.indexOf("joinNode_output"), "[C] nodeA should run before joinNode");
         assertTrue(executionPathC.indexOf("nodeC_output") < executionPathC.indexOf("joinNode_output"), "[C] nodeC should run before joinNode");
+    }
+
+    @Test
+    void testFailedCompilationForDivergingLinearRouters() {
+        log.info(ANSI_BLUE + "--- Test: Failed Compilation for Diverging Linear Routers --- " + ANSI_RESET);
+
+        EchoNode entryNode = new EchoNode("entry");
+        EchoNode nodeA = new EchoNode("nodeA");
+        EchoNode nodeB = new EchoNode("nodeB");
+        EchoNode nodeX = new EchoNode("nodeX");
+        EchoNode nodeY = new EchoNode("nodeY");
+
+        workflow = new AgentWorkflow(entryNode.getName());
+        workflow.addNode(entryNode).addNode(nodeA).addNode(nodeB).addNode(nodeX).addNode(nodeY);
+
+        // N-furcation from entryNode with LinearRouters to different nodes (nodeX, nodeY)
+        // This is not what we are testing for failure yet. The failure is when A and B go to different nodes.
+        // Let's make entry go to A and B, and then A goes to X, B goes to Y.
+        // The N-furcation point for the validation is 'entry' if it has two linear routers to A and B.
+        // No, the point of failure is if 'entry' has two linear routers, one to X and one to Y.
+
+        // Correct setup for the test: entry has two linear edges to different nodes.
+        // This is an N-furcation (entry -> X, entry -> Y) that should fail compilation.
+        workflow.addEdge(entryNode.getName(), nodeX.getName()); // entry -> nodeX
+        workflow.addEdge(entryNode.getName(), nodeY.getName()); // entry -> nodeY (different target)
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+            workflow.compile();
+        });
+
+        String expectedMessagePart = String.format(
+            "Parallel branch node '%s' (from fork '%s') has no outgoing routers and cannot converge.",
+            nodeX.getName(), entryNode.getName()
+        );
+        assertTrue(exception.getMessage().contains(expectedMessagePart),
+                   "Exception message should indicate that a parallel branch has no outgoing routers. Actual: " + exception.getMessage());
+        log.info("Successfully caught expected IllegalStateException: {}", exception.getMessage());
+    }
+
+    @Test
+    void testSuccessfulCompilationForConvergingLinearRouters() {
+        log.info(ANSI_BLUE + "--- Test: Successful Compilation for Converging Linear Routers --- " + ANSI_RESET);
+
+        EchoNode entryNode = new EchoNode("entryLR"); // LR for Linear Router, to avoid name clashes if logs are interleaved
+        EchoNode nodeA = new EchoNode("nodeALR");
+        EchoNode nodeB = new EchoNode("nodeBLR");
+        EchoNode joinNode = new EchoNode("joinNodeLR");
+
+        workflow = new AgentWorkflow(entryNode.getName());
+        workflow.addNode(entryNode).addNode(nodeA).addNode(nodeB).addNode(joinNode);
+
+        // N-furcation from entryNode with LinearRouters to nodeA and nodeB
+        workflow.addEdge(entryNode.getName(), nodeA.getName());
+        workflow.addEdge(entryNode.getName(), nodeB.getName());
+        workflow.addEdge(nodeA.getName(), joinNode.getName());
+        workflow.addEdge(nodeB.getName(), joinNode.getName());
+
+        // This should compile successfully according to the validation logic
+        assertDoesNotThrow(() -> {
+            compiledWorkflow = workflow.compile();
+        }, "Compilation should succeed for converging linear routers from the same source.");
+
+        // Optional: Execute to ensure it runs (though compilation is the main test here)
+        AgentState initialState = new AgentState("test-tenant", "test-thread-lr-success");
+        AgentState finalState = compiledWorkflow.execute(initialState, new WorkflowConfig());
+
+        @SuppressWarnings("unchecked")
+        List<String> executionPath = (List<String>) finalState.get("execution_path");
+        if (executionPath == null) executionPath = new ArrayList<>();
+        log.info("Execution path (Converging Linear Routers): {}", executionPath);
+    }
+
+    @Test
+    void testCompilationWarningAndExecutionForMixedRouters() {
+        log.info(ANSI_BLUE + "--- Test: Compilation Warning and Execution for Mixed Routers (Linear + Conditional) --- " + ANSI_RESET);
+
+        EchoNode entryNode = new EchoNode("entryMixed");
+        EchoNode nodeA = new EchoNode("nodeAMixed"); // Reached via LinearRouter
+        EchoNode nodeB = new EchoNode("nodeBMixed"); // Reached via ConditionalRouter
+        EchoNode joinNode = new EchoNode("joinNodeMixed");
+
+        workflow = new AgentWorkflow(entryNode.getName());
+        workflow.addNode(entryNode).addNode(nodeA).addNode(nodeB).addNode(joinNode);
+
+        // N-furcation from entryNode:
+        // Path 1: LinearRouter to nodeA
+        workflow.addEdge(entryNode.getName(), nodeA.getName());
+        // Path 2: ConditionalRouter to nodeB
+        workflow.addRouter(entryNode.getName(), new ConditionalRouter((state, config) -> {
+            if ("goToB".equals(state.get("conditionMixed"))) {
+                return nodeB.getName();
+            }
+            return null; // Or some other path if condition not met
+        }));
+
+        // Routers for parallel branches to joinNode
+        workflow.addEdge(nodeA.getName(), joinNode.getName());
+        workflow.addEdge(nodeB.getName(), joinNode.getName());
+
+        // This should compile successfully but issue a warning because of mixed router types in N-furcation.
+        assertDoesNotThrow(() -> {
+            compiledWorkflow = workflow.compile();
+        }, "Compilation should succeed for mixed routers (Linear + Conditional) in an N-furcation.");
+        // Ideally, we would capture and assert the log warning here, but that requires more setup.
+        log.info("Compilation with mixed routers succeeded as expected (warning should have been logged by compiler).");
+
+        // Execute to ensure it runs correctly
+        AgentState initialState = new AgentState("test-tenant", "test-thread-mixed");
+        initialState.set("conditionMixed", "goToB"); // Ensure conditional path to nodeB is taken
+
+        AgentState finalState = compiledWorkflow.execute(initialState, new WorkflowConfig());
+
+        @SuppressWarnings("unchecked")
+        List<String> executionPath = (List<String>) finalState.get("execution_path");
+        if (executionPath == null) executionPath = new ArrayList<>();
+        log.info("Execution path (Mixed Routers): {}", executionPath);
+
+        assertTrue(executionPath.contains(entryNode.getName() + "_output"), "Entry node should have run");
+        assertTrue(executionPath.contains(nodeA.getName() + "_output"), "NodeA (linear path) should have run");
+        assertTrue(executionPath.contains(nodeB.getName() + "_output"), "NodeB (conditional path) should have run");
+        assertTrue(executionPath.contains(joinNode.getName() + "_output"), "JoinNode should have run");
+        
+        assertEquals(joinNode.getName() + "_output", executionPath.get(executionPath.size() - 1), "JoinNode should be the last element");
+        assertEquals(entryNode.getName() + "_output", executionPath.get(0), "Entry node should be the first element");
+        assertTrue(executionPath.indexOf(nodeA.getName() + "_output") < executionPath.indexOf(joinNode.getName() + "_output"), "NodeA should run before JoinNode");
+        assertTrue(executionPath.indexOf(nodeB.getName() + "_output") < executionPath.indexOf(joinNode.getName() + "_output"), "NodeB should run before JoinNode");
     }
 }

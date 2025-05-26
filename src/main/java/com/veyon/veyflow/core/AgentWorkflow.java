@@ -146,6 +146,93 @@ public class AgentWorkflow {
                 // throw new IllegalStateException("Disconnected nodes detected: " + disconnectedNodes);
             }
             log.debug("No disconnected nodes detected (or handled as warnings).");
+
+            // New N-furcation Join Validation Logic
+            log.debug("Validating N-furcation join convergence...");
+            for (String potentialForkNodeName : this.routers.keySet()) {
+                List<NodeRouter> outgoingRoutersFromFork = this.routers.get(potentialForkNodeName);
+
+                if (outgoingRoutersFromFork == null || outgoingRoutersFromFork.size() <= 1) {
+                    continue; // Not an N-furcation from this node
+                }
+
+                List<String> parallelBranchNodes = new ArrayList<>();
+                boolean forkIsAllLinear = true;
+                for (NodeRouter router : outgoingRoutersFromFork) {
+                    if (router instanceof LinearRouter) {
+                        String targetNode = ((LinearRouter) router).getTargetNode();
+                        if (!parallelBranchNodes.contains(targetNode)) { // Add only distinct branch nodes
+                            parallelBranchNodes.add(targetNode);
+                        }
+                    } else {
+                        forkIsAllLinear = false;
+                        break;
+                    }
+                }
+
+                if (!forkIsAllLinear) {
+                    log.warn("N-furcation from '{}' involves non-LinearRouters. Strict join validation skipped for this fork. Runtime behavior will determine flow.", potentialForkNodeName);
+                    continue;
+                }
+
+                if (parallelBranchNodes.size() <= 1) {
+                    // This means all linear routers from the fork point to the same immediate node, or it's not a true multi-branch fork.
+                    // This is valid by default under the new interpretation, as there aren't multiple distinct branches to check for convergence.
+                    log.debug("N-furcation from '{}' either leads to a single immediate node or is not a multi-branch fork. Skipping convergence check.", potentialForkNodeName);
+                    continue;
+                }
+
+                // Now we have distinct parallelBranchNodes (e.g., A, B) from a purely linear fork.
+                // Check if they all converge to a single common join node via a single LinearRouter each.
+                log.debug("Checking convergence for parallel branches {} from fork node '{}'", parallelBranchNodes, potentialForkNodeName);
+                String commonJoinNodeTarget = null;
+                boolean firstBranchTargetSet = false;
+
+                for (String branchNodeName : parallelBranchNodes) {
+                    List<NodeRouter> routersFromBranch = this.routers.get(branchNodeName);
+                    if (routersFromBranch == null || routersFromBranch.isEmpty()) {
+                        String errorMsg = String.format("Compilation Error: Parallel branch node '%s' (from fork '%s') has no outgoing routers and cannot converge.", branchNodeName, potentialForkNodeName);
+                        log.error(errorMsg);
+                        throw new IllegalStateException(errorMsg);
+                    }
+                    if (routersFromBranch.size() > 1) {
+                        String errorMsg = String.format("Compilation Error: Parallel branch node '%s' (from fork '%s') has multiple outgoing routers, making unambiguous join target unclear for this validation.", branchNodeName, potentialForkNodeName);
+                        log.error(errorMsg);
+                        throw new IllegalStateException(errorMsg);
+                    }
+
+                    NodeRouter singleRouterFromBranch = routersFromBranch.get(0);
+                    if (!(singleRouterFromBranch instanceof LinearRouter)) {
+                        log.warn("Parallel branch node '{}' (from fork '{}') uses a non-LinearRouter. Strict join validation to a single common node is skipped for this path. Runtime behavior will determine flow.", branchNodeName, potentialForkNodeName);
+                        // If one branch is conditional, we can't enforce a common linear join for all others based on this strict rule.
+                        // We could decide to bail out for the whole fork, or allow this specific branch to be conditional.
+                        // For now, let's be strict: if we are in this validation path (fork was all linear), then branches must also be linear to a common join.
+                        String errorMsg = String.format("Compilation Error: Parallel branch node '%s' (from fork '%s') must use a LinearRouter to converge, but found %s.", branchNodeName, potentialForkNodeName, singleRouterFromBranch.getClass().getSimpleName());
+                        log.error(errorMsg);
+                        throw new IllegalStateException(errorMsg);
+                    }
+
+                    String currentBranchJoinTarget = ((LinearRouter) singleRouterFromBranch).getTargetNode();
+                    if (!firstBranchTargetSet) {
+                        commonJoinNodeTarget = currentBranchJoinTarget;
+                        firstBranchTargetSet = true;
+                    } else {
+                        if (commonJoinNodeTarget == null || !commonJoinNodeTarget.equals(currentBranchJoinTarget)) {
+                            String errorMsg = String.format("Compilation Error: Parallel branches from fork '%s' do not converge to the same LinearRouter target. Expected join at '%s', but branch '%s' targets '%s'.", potentialForkNodeName, commonJoinNodeTarget, branchNodeName, currentBranchJoinTarget);
+                            log.error(errorMsg);
+                            throw new IllegalStateException(errorMsg);
+                        }
+                    }
+                }
+
+                if (firstBranchTargetSet) { // Implies all branches checked and converged
+                    log.debug("N-furcation from '{}' with branches {} correctly converges to common join node '{}' via LinearRouters.", potentialForkNodeName, parallelBranchNodes, commonJoinNodeTarget);
+                } else {
+                    // This case should ideally not be reached if parallelBranchNodes.size() > 1, as an error would have been thrown.
+                    log.warn("N-furcation from '{}': Could not determine a common join node for branches {}. This might indicate an issue or an unhandled validation case.", potentialForkNodeName, parallelBranchNodes);
+                }
+            }
+            log.debug("N-furcation join validation complete.");
         }
 
         // Create CompiledWorkflow with the map of lists of routers
