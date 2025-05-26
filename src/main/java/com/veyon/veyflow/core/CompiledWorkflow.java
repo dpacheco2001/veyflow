@@ -3,6 +3,8 @@ package com.veyon.veyflow.core;
 import com.veyon.veyflow.config.CompileConfig;
 import com.veyon.veyflow.routing.NodeRouter;
 import com.veyon.veyflow.state.AgentState;
+import com.veyon.veyflow.state.AgentStateRepository;
+import com.veyon.veyflow.state.PersistenceMode;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -27,6 +29,7 @@ public class CompiledWorkflow {
     private final Map<String, List<String>> optimizedPaths;
     private final boolean hasCircularDependencies;
     private final Set<String> disconnectedNodes;
+    private final AgentStateRepository agentStateRepository;
     
     // Constructor package-private - solo se puede crear desde AgentWorkflow.compile()
     CompiledWorkflow(
@@ -36,7 +39,8 @@ public class CompiledWorkflow {
             CompileConfig config,
             Map<String, List<String>> optimizedPaths,
             boolean hasCircularDependencies,
-            Set<String> disconnectedNodes) {
+            Set<String> disconnectedNodes,
+            AgentStateRepository agentStateRepository) {
         this.nodes = new HashMap<>(nodes);
         this.routers = new HashMap<>(routers);
         this.entryNode = entryNode;
@@ -44,6 +48,7 @@ public class CompiledWorkflow {
         this.optimizedPaths = optimizedPaths;
         this.hasCircularDependencies = hasCircularDependencies;
         this.disconnectedNodes = disconnectedNodes;
+        this.agentStateRepository = agentStateRepository;
     }
     
     /**
@@ -112,6 +117,21 @@ public class CompiledWorkflow {
             log.warn("Workflow execution reached max iterations ({})", config.getMaxIterations());
         }
         
+        // Save state if persistence mode is REDIS and repository is available
+        if (this.agentStateRepository != null && state.getPersistenceMode() == PersistenceMode.REDIS) {
+            try {
+                log.debug("Saving final agent state to repository for tenant '{}', thread '{}'", 
+                          state.getTenantId(), state.getThreadId());
+                this.agentStateRepository.save(state);
+            } catch (Exception e) {
+                log.error("Failed to save state for tenant '{}', thread '{}' to repository after compiled workflow completion.", 
+                          state.getTenantId(), state.getThreadId(), e);
+            }
+        } else if (this.agentStateRepository == null && state.getPersistenceMode() == PersistenceMode.REDIS) {
+            log.warn("AgentState persistenceMode is REDIS, but no AgentStateRepository is configured in CompiledWorkflow for tenant '{}', thread '{}'. State not saved.",
+                     state.getTenantId(), state.getThreadId());
+        }
+
         return state;
     }
     

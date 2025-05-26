@@ -4,6 +4,8 @@ import com.veyon.veyflow.routing.NodeRouter;
 import com.veyon.veyflow.routing.LinearRouter;
 import com.veyon.veyflow.state.AgentState;
 import com.veyon.veyflow.config.CompileConfig;
+import com.veyon.veyflow.state.AgentStateRepository;
+import com.veyon.veyflow.state.InMemoryAgentStateRepository;
 
 import java.util.Map;
 import java.util.HashMap;
@@ -27,17 +29,29 @@ public class AgentWorkflow {
     private final Map<String, NodeRouter> routers;
     private final String entryNode;
     private final AgentExecutor executor;
+    private final AgentStateRepository agentStateRepository;
     
     /**
-     * Create a new agent workflow.
+     * Create a new agent workflow with a specific state repository.
+     * 
+     * @param entryNode The name of the entry node
+     * @param agentStateRepository The repository for agent state
+     */
+    public AgentWorkflow(String entryNode, AgentStateRepository agentStateRepository) {
+        this.nodes = new HashMap<>();
+        this.routers = new HashMap<>();
+        this.entryNode = entryNode;
+        this.agentStateRepository = agentStateRepository;
+        this.executor = new AgentExecutor(entryNode, this.agentStateRepository);
+    }
+
+    /**
+     * Create a new agent workflow with a default InMemoryAgentStateRepository.
      * 
      * @param entryNode The name of the entry node
      */
     public AgentWorkflow(String entryNode) {
-        this.nodes = new HashMap<>();
-        this.routers = new HashMap<>();
-        this.entryNode = entryNode;
-        this.executor = new AgentExecutor(entryNode);
+        this(entryNode, new InMemoryAgentStateRepository());
     }
     
     /**
@@ -137,15 +151,16 @@ public class AgentWorkflow {
             optimizedPaths = generateOptimizedPaths();
         }
         
-        // Crear el workflow compilado
+        // Crear y devolver el workflow compilado
         return new CompiledWorkflow(
-                nodes,
-                routers,
-                entryNode,
-                config,
-                optimizedPaths,
-                hasCircularDependencies,
-                disconnectedNodes
+            nodes,
+            routers,
+            entryNode,
+            config,
+            optimizedPaths,
+            hasCircularDependencies,
+            disconnectedNodes,
+            this.agentStateRepository
         );
     }
     

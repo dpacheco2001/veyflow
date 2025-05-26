@@ -1,6 +1,8 @@
 package com.veyon.veyflow.state;
 
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import java.time.ZonedDateTime;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.List;
@@ -216,7 +218,10 @@ public class AgentState {
      * @return JSON representation of the state
      */
     public String toJson() {
-        return new Gson().toJson(this);
+        Gson gson = new GsonBuilder()
+            .registerTypeAdapter(ZonedDateTime.class, new ZonedDateTimeAdapter())
+            .create();
+        return gson.toJson(this);
     }
 
     /**
@@ -226,7 +231,10 @@ public class AgentState {
      * @return The deserialized state
      */
     public static AgentState fromJson(String json) {
-        return new Gson().fromJson(json, AgentState.class);
+        Gson gson = new GsonBuilder()
+            .registerTypeAdapter(ZonedDateTime.class, new ZonedDateTimeAdapter())
+            .create();
+        return gson.fromJson(json, AgentState.class);
     }
     
     /**
