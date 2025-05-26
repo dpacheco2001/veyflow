@@ -1,11 +1,16 @@
 package com.veyon.veyflow.config;
 
+import com.veyon.veyflow.state.PersistenceMode;
+
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.Collections;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Configuration for a workflow execution, defining which tool services and specific methods
@@ -14,15 +19,143 @@ import java.util.Collections;
  */
 public class WorkflowConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(WorkflowConfig.class);
+
+    private String tenantId;
+    private String threadId;
+    private PersistenceMode persistenceMode;
+
     // Map<ServiceClassName, List<MethodName>>
     // List<MethodName> can contain "*" to indicate all methods of the service are active.
     private Map<String, List<String>> configuredToolServices;
+
+    private transient WorkflowConfigRepository repository;
+    private transient boolean isDirty = false;
 
     /**
      * Default constructor initializing an empty configuration.
      */
     public WorkflowConfig() {
         this.configuredToolServices = new HashMap<>();
+        this.persistenceMode = PersistenceMode.IN_MEMORY;
+    }
+
+    /**
+     * Constructor for creating a WorkflowConfig with specific identifiers.
+     *
+     * @param tenantId The tenant ID.
+     * @param threadId The thread ID.
+     */
+    public WorkflowConfig(String tenantId, String threadId) {
+        this();
+        this.tenantId = tenantId;
+        this.threadId = threadId;
+    }
+
+    /**
+     * Constructor for creating a WorkflowConfig with specific identifiers and persistence mode.
+     *
+     * @param tenantId The tenant ID.
+     * @param threadId The thread ID.
+     * @param persistenceMode The persistence mode.
+     */
+    public WorkflowConfig(String tenantId, String threadId, PersistenceMode persistenceMode) {
+        this(tenantId, threadId);
+        this.persistenceMode = (persistenceMode != null) ? persistenceMode : PersistenceMode.IN_MEMORY;
+        // Initial state is not dirty from constructor
+    }
+
+    // Repository and Dirty Flag Management
+    public void setRepository(WorkflowConfigRepository repository) {
+        this.repository = repository;
+    }
+
+    public void clearDirtyFlag() {
+        this.isDirty = false;
+    }
+
+    public boolean isDirty() {
+        return isDirty;
+    }
+
+    public void save() {
+        if (repository == null) {
+            log.warn("Repository not set, cannot save WorkflowConfig for tenant {} thread {}.", tenantId, threadId);
+            // Optionally, throw new IllegalStateException("Repository not set.");
+            return;
+        }
+
+        if (persistenceMode == PersistenceMode.IN_MEMORY) {
+            log.debug("PersistenceMode is IN_MEMORY, explicit save operation to external store skipped for WorkflowConfig tenant {} thread {}.", tenantId, threadId);
+            // If you want InMemoryRepository to also clear dirty flag upon any 'save' call:
+            // if (isDirty) { repository.save(this); this.isDirty = false; }
+            return;
+        }
+
+        if (persistenceMode == PersistenceMode.REDIS && (tenantId == null || threadId == null || tenantId.isBlank() || threadId.isBlank())) {
+            throw new IllegalStateException("Cannot save to REDIS without a valid tenantId and threadId.");
+        }
+
+        if (isDirty) {
+            try {
+                log.info("Saving dirty WorkflowConfig for tenant {} thread {} with mode {}.", tenantId, threadId, persistenceMode);
+                repository.save(this);
+                this.isDirty = false; // Reset dirty flag after successful save
+            } catch (Exception e) {
+                log.error("Failed to save WorkflowConfig for tenant {} thread {}: {}", tenantId, threadId, e.getMessage(), e);
+                // Depending on policy, we might want to keep isDirty=true if save fails, or rethrow
+            }
+        } else {
+            log.debug("WorkflowConfig for tenant {} thread {} is not dirty, save operation skipped.", tenantId, threadId);
+        }
+    }
+
+    // Getters and Setters
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        if (this.tenantId == null || !this.tenantId.equals(tenantId)) {
+            this.tenantId = tenantId;
+            this.isDirty = true;
+        }
+    }
+
+    public String getThreadId() {
+        return threadId;
+    }
+
+    public void setThreadId(String threadId) {
+        if (this.threadId == null || !this.threadId.equals(threadId)) {
+            this.threadId = threadId;
+            this.isDirty = true;
+        }
+    }
+
+    public PersistenceMode getPersistenceMode() {
+        return persistenceMode;
+    }
+
+    public void setPersistenceMode(PersistenceMode persistenceMode) {
+        PersistenceMode newMode = (persistenceMode != null) ? persistenceMode : PersistenceMode.IN_MEMORY;
+        if (this.persistenceMode != newMode) {
+            this.persistenceMode = newMode;
+            this.isDirty = true;
+        }
+    }
+
+    public Map<String, List<String>> getConfiguredToolServices() {
+        return configuredToolServices;
+    }
+
+    public void setConfiguredToolServices(Map<String, List<String>> configuredToolServices) {
+        // Typically for deserialization, consider if this should always mark dirty
+        // For now, let's assume if it's different, it's dirty.
+        if (this.configuredToolServices == null || !this.configuredToolServices.equals(configuredToolServices)) {
+            this.configuredToolServices = configuredToolServices;
+            this.isDirty = true; 
+        }
     }
 
     /**
@@ -41,9 +174,16 @@ public class WorkflowConfig {
             // or pass an empty list explicitly if that's the desired semantic.
             // For now, let's assume activating with no methods means no methods are active.
             this.configuredToolServices.put(serviceClassName, new ArrayList<>());
+            this.isDirty = true;
             return;
         }
-        this.configuredToolServices.put(serviceClassName, new ArrayList<>(methodNames));
+        List<String> newMethods = new ArrayList<>(methodNames);
+        List<String> currentMethods = this.configuredToolServices.getOrDefault(serviceClassName, new ArrayList<>());
+
+        if (!currentMethods.equals(newMethods)) {
+            this.configuredToolServices.put(serviceClassName, newMethods);
+            this.isDirty = true;
+        }
     }
 
     /**
@@ -56,7 +196,13 @@ public class WorkflowConfig {
         if (serviceClassName == null || serviceClassName.isBlank()) {
             throw new IllegalArgumentException("Service class name cannot be null or blank.");
         }
-        this.configuredToolServices.put(serviceClassName, Collections.singletonList("*"));
+        List<String> newMethods = Collections.singletonList("*");
+        List<String> currentMethods = this.configuredToolServices.getOrDefault(serviceClassName, new ArrayList<>());
+        
+        if (!currentMethods.equals(newMethods) || currentMethods.size() != 1) { // check if it's already '*' or needs update
+            this.configuredToolServices.put(serviceClassName, newMethods);
+            this.isDirty = true;
+        }
     }
 
     /**
@@ -78,6 +224,16 @@ public class WorkflowConfig {
     }
 
     /**
+     * Checks if a specific tool service is configured (i.e., has any methods activated).
+     *
+     * @param serviceClassName The fully qualified class name of the ToolService.
+     * @return {@code true} if the service is configured, {@code false} otherwise.
+     */
+    public boolean isToolServiceConfigured(String serviceClassName) {
+        return this.configuredToolServices.containsKey(serviceClassName);
+    }
+
+    /**
      * Gets the set of fully qualified class names of tool services that have any methods activated
      * in this configuration.
      *
@@ -86,10 +242,4 @@ public class WorkflowConfig {
     public Set<String> getActiveServiceClassNames() {
         return Collections.unmodifiableSet(this.configuredToolServices.keySet());
     }
-
-    // In the future, this class can be expanded to include other
-    // workflow-level or tenant-specific configurations.
-    // For example:
-    // private String tenantId;
-    // private Map<String, Object> otherTenantConfigs;
 }

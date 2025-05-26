@@ -233,7 +233,7 @@ public class ToolAgent {
                     
                     ToolAnnotation toolAnnotation = method.getAnnotation(ToolAnnotation.class);
                     Tool function = new Tool();
-                    function.setName(serviceClass.getSimpleName() + "_" + method.getName());
+                    function.setName(serviceClass.getSimpleName() + "." + method.getName());
                     function.setDescription(toolAnnotation.value()); 
 
                     List<Parameter> parametersList = new ArrayList<>();
