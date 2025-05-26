@@ -46,9 +46,9 @@ Veyflow tiene como objetivo simplificar el desarrollo de aplicaciones basadas en
 
 ## Instalación
 
-1.  **Clonar el repositorio (si aplica):**
+1.  **Clonar el repositorio :**
     ```bash
-    git clone <URL_DEL_REPOSITORIO>
+    git clone https://github.com/dpacheco2001/veyflow.git
     cd veyflow
     ```
 2.  **Construir el proyecto con Maven:**
