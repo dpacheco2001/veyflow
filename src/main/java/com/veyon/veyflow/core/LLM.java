@@ -32,18 +32,11 @@ public class LLM {
 
     public AgentTurnResult execute(
         AgentState initialState,
-        String userQuery,
         String systemPromptOverride,
         ModelParameters modelParamsOverride
     ) {
         AgentState currentState = initialState;
         List<ChatMessage> newMessagesThisTurn = new ArrayList<>();
-
-        if (userQuery != null && !userQuery.isEmpty()) {
-            ChatMessage userMessage = new ChatMessage(ChatMessage.Role.USER, userQuery);
-            currentState.addChatMessage(userMessage);
-            // userMessage is not part of newMessagesThisTurn as it's the input for this turn
-        }
 
         String effectiveSystemPrompt = "You are a helpful assistant."; // Default
         if (systemPromptOverride != null && !systemPromptOverride.isEmpty()) {

@@ -292,7 +292,11 @@ public class AgentConversationTest {
             AgentState finalState = compiledWorkflow.execute(initialState);
             assertNotNull(finalState, "Final state should not be null after workflow execution.");
             log.info(ANSI_GREEN + "Workflow execution completed. Final state tenant: {}, thread: {}" + ANSI_RESET, finalState.getTenantId(), finalState.getThreadId());
-
+            //7.1 Segunda entrada
+            initialState.addChatMessage(new ChatMessage(ChatMessage.Role.USER, "What is the capital of Spain?"));
+            AgentState finalState2 = compiledWorkflow.execute(initialState);
+            assertNotNull(finalState2, "Final state should not be null after workflow execution.");
+            log.info(ANSI_GREEN + "Workflow execution completed. Final state tenant: {}, thread: {}" + ANSI_RESET, finalState2.getTenantId(), finalState2.getThreadId());
             // 7. Verificación del Estado en Redis
             log.info(ANSI_BLUE + "--- Verifying State in Redis --- " + ANSI_RESET);
             Optional<AgentState> retrievedStateOptional = redisAgentStateRepository.findById(uniqueTestTenantId, uniqueTestThreadId);
@@ -320,7 +324,7 @@ public class AgentConversationTest {
                 try {
                     String redisKey = "agent_state:" + uniqueTestTenantId + ":" + uniqueTestThreadId;
                     System.out.println(ANSI_BLUE + "--- Cleaning up Redis key: " + redisKey + " --- " + ANSI_RESET);
-                    redisConnection.sync().del(redisKey);
+                    // redisConnection.sync().del(redisKey);
                     redisConnection.close();
                 } catch (Exception e) {
                     log.warn("Could not clean up Redis key for tenant {} and thread {}: {}", uniqueTestTenantId, uniqueTestThreadId, e.getMessage());
@@ -390,12 +394,11 @@ public class AgentConversationTest {
         @Override
         public AgentState process(AgentState state) {
             log.info(ANSI_BLUE + "--- SimpleLLMNode processing --- " + ANSI_RESET);
-            String userInput = state.getChatMessages().get(state.getChatMessages().size() - 1).getContent();
+            // String userInput = state.getChatMessages().get(state.getChatMessages().size() - 1).getContent(); // This line is no longer needed here as LLM will use the last message from state
 
             LLM llm = new LLM(modelService, modelName);
             AgentTurnResult llmResult = llm.execute(
                 state, 
-                userInput, 
                 persona, 
                 modelParams
             );

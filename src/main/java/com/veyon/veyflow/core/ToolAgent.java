@@ -46,7 +46,6 @@ public class ToolAgent {
 
     public AgentTurnResult execute(
         AgentState initialState,
-        String userQuery,
         WorkflowConfig workflowConfig,
         String systemPromptOverride,
         ModelParameters modelParamsOverride
@@ -59,10 +58,6 @@ public class ToolAgent {
 
         List<ToolService> activeToolServices = getActiveToolServices(workflowConfig);
         List<Tool> functionDeclarations = buildFunctionDeclarations(currentState.getTenantId(), activeToolServices, workflowConfig);
-
-        if (userQuery != null && !userQuery.isEmpty()) {
-            currentState.addChatMessage(new ChatMessage(ChatMessage.Role.USER, userQuery));
-        }
 
         // Determine System Prompt
         String effectiveSystemPrompt = "You are a helpful assistant."; // Default system prompt
