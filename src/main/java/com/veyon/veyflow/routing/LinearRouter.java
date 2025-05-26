@@ -1,6 +1,7 @@
 package com.veyon.veyflow.routing;
 
 import com.veyon.veyflow.state.AgentState;
+import com.veyon.veyflow.config.WorkflowConfig;
 
 /**
  * Enrutador lineal que siempre redirige al nodo de destino especificado.
@@ -22,7 +23,8 @@ public class LinearRouter implements NodeRouter {
     }
     
     @Override
-    public String route(AgentState state) {
+    public String route(AgentState state, WorkflowConfig workflowConfig) {
+        // workflowConfig is not used in this simple router, which is fine.
         return targetNode;
     }
     

@@ -7,9 +7,25 @@ import com.veyon.veyflow.foundationmodels.ModelParameters;
 import com.veyon.veyflow.foundationmodels.OpenAIModelService;
 import com.veyon.veyflow.core.AgentWorkflow;
 import com.veyon.veyflow.core.CompiledWorkflow;
+import com.veyon.veyflow.core.LLM;
+import com.veyon.veyflow.core.AgentNode;
+import com.veyon.veyflow.config.WorkflowConfig;
+import com.veyon.veyflow.state.RedisAgentStateRepository;
+import com.veyon.veyflow.state.PersistenceMode;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.api.StatefulRedisConnection;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Arrays;
+import java.util.Optional;
+import java.util.UUID;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,20 +33,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import com.veyon.veyflow.tools.ToolService;
 import com.veyon.veyflow.core.ToolAgent;
 import com.veyon.veyflow.core.AgentTurnResult;
-import com.veyon.veyflow.core.LLM;
-import com.veyon.veyflow.core.AgentNode;
-import com.veyon.veyflow.state.RedisAgentStateRepository;
-import com.veyon.veyflow.state.PersistenceMode;
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.api.StatefulRedisConnection;
-
-import static org.junit.jupiter.api.Assertions.*;
-
-import java.util.Map;
-import java.util.HashMap;
-import java.util.Optional;
-import java.util.UUID;
-
 import com.veyon.veyflow.state.ChatMessage;
 
 @SpringBootTest
@@ -289,12 +291,13 @@ public class AgentConversationTest {
 
             // 6. Ejecución del Workflow Compilado
             log.info(ANSI_BLUE + "--- Executing Compiled Workflow --- " + ANSI_RESET);
-            AgentState finalState = compiledWorkflow.execute(initialState);
+            WorkflowConfig workflowConfig = new WorkflowConfig(); // Use public constructor
+            AgentState finalState = compiledWorkflow.execute(initialState, workflowConfig); // Pass config
             assertNotNull(finalState, "Final state should not be null after workflow execution.");
             log.info(ANSI_GREEN + "Workflow execution completed. Final state tenant: {}, thread: {}" + ANSI_RESET, finalState.getTenantId(), finalState.getThreadId());
             //7.1 Segunda entrada
             initialState.addChatMessage(new ChatMessage(ChatMessage.Role.USER, "What is the capital of Spain?"));
-            AgentState finalState2 = compiledWorkflow.execute(initialState);
+            AgentState finalState2 = compiledWorkflow.execute(initialState, workflowConfig); // Pass config
             assertNotNull(finalState2, "Final state should not be null after workflow execution.");
             log.info(ANSI_GREEN + "Workflow execution completed. Final state tenant: {}, thread: {}" + ANSI_RESET, finalState2.getTenantId(), finalState2.getThreadId());
             // 7. Verificación del Estado en Redis
@@ -324,7 +327,7 @@ public class AgentConversationTest {
                 try {
                     String redisKey = "agent_state:" + uniqueTestTenantId + ":" + uniqueTestThreadId;
                     System.out.println(ANSI_BLUE + "--- Cleaning up Redis key: " + redisKey + " --- " + ANSI_RESET);
-                    // redisConnection.sync().del(redisKey);
+                    redisConnection.sync().del(redisKey);
                     redisConnection.close();
                 } catch (Exception e) {
                     log.warn("Could not clean up Redis key for tenant {} and thread {}: {}", uniqueTestTenantId, uniqueTestThreadId, e.getMessage());
@@ -371,7 +374,7 @@ public class AgentConversationTest {
     }
 
     // Inner class for a simple LLM node
-    class SimpleLLMNode implements AgentNode {
+    static class SimpleLLMNode implements AgentNode {
         private final String nodeName;
         private final FoundationModelService modelService;
         private final String modelName;
@@ -392,7 +395,7 @@ public class AgentConversationTest {
         }
 
         @Override
-        public AgentState process(AgentState state) {
+        public AgentState process(AgentState state, WorkflowConfig workflowConfig) { 
             log.info(ANSI_BLUE + "--- SimpleLLMNode processing --- " + ANSI_RESET);
             // String userInput = state.getChatMessages().get(state.getChatMessages().size() - 1).getContent(); // This line is no longer needed here as LLM will use the last message from state
 

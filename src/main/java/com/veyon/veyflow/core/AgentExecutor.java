@@ -6,6 +6,7 @@ import com.veyon.veyflow.state.InMemoryAgentStateRepository;
 import com.veyon.veyflow.state.PersistenceMode;
 import com.veyon.veyflow.state.ChatMessage;
 import com.veyon.veyflow.routing.NodeRouter;
+import com.veyon.veyflow.config.WorkflowConfig;
 
 import java.util.Map;
 import java.util.HashMap;
@@ -81,9 +82,10 @@ public class AgentExecutor {
      * Execute the agent with the given state.
      * 
      * @param state The initial state
+     * @param workflowConfig The workflow configuration
      * @return The final state after execution
      */
-    public AgentState execute(AgentState state) {
+    public AgentState execute(AgentState state, WorkflowConfig workflowConfig) {
         // Set the initial node
         state.setCurrentNode(entryNode);
         
@@ -100,7 +102,7 @@ public class AgentExecutor {
             log.debug("Executing node: {}", currentNodeName);
             
             // Process the current node
-            state = currentNode.process(state);
+            state = currentNode.process(state, workflowConfig);
             
             // Get all routers for the current node
             List<NodeRouter> currentRouters = routers.get(currentNodeName);
@@ -113,9 +115,9 @@ public class AgentExecutor {
             
             List<String> nextNodeNames = new ArrayList<>();
             for (NodeRouter router : currentRouters) {
-                String nextNodeCandidate = router.route(state);
-                if (nextNodeCandidate != null && !nextNodeCandidate.isEmpty()) {
-                    nextNodeNames.add(nextNodeCandidate);
+                String nextNodeName = router.route(state, workflowConfig);
+                if (nextNodeName != null && !nextNodeName.isEmpty()) {
+                    nextNodeNames.add(nextNodeName);
                 }
             }
             
@@ -131,7 +133,7 @@ public class AgentExecutor {
             } else {
                 // Multiple next nodes, execute in parallel
                 log.info("Forking parallel execution from {} to nodes: {}", currentNodeName, nextNodeNames);
-                executeParallel(state, nextNodeNames.toArray(new String[0]));
+                executeParallel(state, workflowConfig, nextNodeNames.toArray(new String[0]));
                 break; // Stop current linear execution as it has forked
             }
         }
@@ -158,9 +160,10 @@ public class AgentExecutor {
      * Execute nodes in parallel.
      * 
      * @param state The current state
+     * @param workflowConfig The workflow configuration
      * @param targetNodes Array of target node names
      */
-    private void executeParallel(AgentState state, String... targetNodes) {
+    private void executeParallel(AgentState state, WorkflowConfig workflowConfig, String... targetNodes) {
         log.debug("Executing {} nodes in parallel", targetNodes.length);
         
         List<CompletableFuture<AgentState>> futures = new ArrayList<>();
@@ -178,7 +181,7 @@ public class AgentExecutor {
                 // For now, we'll call execute on the same instance. This implies that the 'nodes' and 'routers' maps are
                 // populated before any parallel execution and are not modified during it.
                 // The agentStateRepository will be shared, which is generally fine for Redis/DB backed ones.
-                return execute(branchState); 
+                return execute(branchState, workflowConfig); 
             }, executorService);
             
             futures.add(future);
