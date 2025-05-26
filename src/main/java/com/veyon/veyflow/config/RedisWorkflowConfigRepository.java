@@ -27,17 +27,17 @@ public class RedisWorkflowConfigRepository implements WorkflowConfigRepository {
                 .create();
     }
 
-    private String getKey(String tenantId, String threadId) {
-        return KEY_PREFIX + tenantId + ":" + threadId;
+    private String getKey(String tenantId) {
+        return KEY_PREFIX + tenantId;
     }
 
     @Override
     public void save(WorkflowConfig config) {
-        if (config == null || config.getTenantId() == null || config.getThreadId() == null) {
-            throw new IllegalArgumentException("WorkflowConfig and its tenantId and threadId must not be null");
+        if (config == null || config.getTenantId() == null) {
+            throw new IllegalArgumentException("WorkflowConfig and its tenantId must not be null");
         }
         RedisCommands<String, String> commands = connection.sync();
-        String key = getKey(config.getTenantId(), config.getThreadId());
+        String key = getKey(config.getTenantId());
         String json = gson.toJson(config);
         try {
             commands.set(key, json);
@@ -49,12 +49,12 @@ public class RedisWorkflowConfigRepository implements WorkflowConfigRepository {
     }
 
     @Override
-    public Optional<WorkflowConfig> findById(String tenantId, String threadId) {
-        if (tenantId == null || threadId == null) {
+    public Optional<WorkflowConfig> findById(String tenantId) {
+        if (tenantId == null) {
             return Optional.empty();
         }
         RedisCommands<String, String> commands = connection.sync();
-        String key = getKey(tenantId, threadId);
+        String key = getKey(tenantId);
         try {
             String json = commands.get(key);
             if (json == null || json.isEmpty()) {
@@ -71,12 +71,12 @@ public class RedisWorkflowConfigRepository implements WorkflowConfigRepository {
     }
 
     @Override
-    public boolean delete(String tenantId, String threadId) {
-        if (tenantId == null || threadId == null) {
+    public boolean delete(String tenantId) {
+        if (tenantId == null) {
             return false;
         }
         RedisCommands<String, String> commands = connection.sync();
-        String key = getKey(tenantId, threadId);
+        String key = getKey(tenantId);
         try {
             Long result = commands.del(key);
             boolean deleted = result != null && result > 0;
@@ -93,12 +93,12 @@ public class RedisWorkflowConfigRepository implements WorkflowConfigRepository {
     }
 
     @Override
-    public boolean exists(String tenantId, String threadId) {
-        if (tenantId == null || threadId == null) {
+    public boolean exists(String tenantId) {
+        if (tenantId == null) {
             return false;
         }
         RedisCommands<String, String> commands = connection.sync();
-        String key = getKey(tenantId, threadId);
+        String key = getKey(tenantId);
         try {
             Long result = commands.exists(key);
             boolean exists = result != null && result > 0;

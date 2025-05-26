@@ -16,6 +16,7 @@ import com.veyon.veyflow.state.RedisAgentStateRepository;
 import com.veyon.veyflow.tools.ToolService; 
 import com.veyon.veyflow.tools.ToolCall; 
 import com.veyon.veyflow.foundationmodels.OpenAIModelService;
+import com.veyon.veyflow.foundationmodels.GeminiModelService;
 import com.veyon.veyflow.foundationmodels.ModelParameters;
 import com.veyon.veyflow.core.AgentTurnResult;
 
@@ -114,6 +115,7 @@ public class ImplicitParallelismAndToolAgentTest {
 
     private static final String TENANT_ID = "test-tenant"; 
     private static final String OPENAI_MODEL_FOR_NODE = "gpt-4.1-mini";
+    private static final String GEMINI_MODEL_FOR_NODE = "gemini-2.5-flash-preview-04-17";
     private RedisClient testRedisClient = null;
     private StatefulRedisConnection<String, String> redisConnection = null;
     private String uniqueTestTenantId;
@@ -212,12 +214,12 @@ public class ImplicitParallelismAndToolAgentTest {
             RedisWorkflowConfigRepository redisWorkflowConfigRepository = new RedisWorkflowConfigRepository(redisConnection);
             log.info(ANSI_CYAN + "RedisAgentStateRepository and RedisWorkflowConfigRepository initialized for tenant: {}, thread: {}" + ANSI_RESET, uniqueTestTenantId, uniqueTestThreadId);
 
-            OpenAIModelService modelService = new OpenAIModelService(); 
+            GeminiModelService modelService = new GeminiModelService(); 
             Map<String, ToolService> registeredToolServices = new HashMap<>();
             WeatherToolService weatherService = new WeatherToolService();
             registeredToolServices.put(WeatherToolService.class.getName(), weatherService);
 
-            ToolAgent underlyingToolAgent = new ToolAgent(modelService, registeredToolServices, OPENAI_MODEL_FOR_NODE);
+            ToolAgent underlyingToolAgent = new ToolAgent(modelService, registeredToolServices, GEMINI_MODEL_FOR_NODE);
             String toolAgentNodeSystemPrompt = "You are an assistant that can get weather information. Prioritize using tools.";
             ModelParameters toolAgentNodeModelParams = new ModelParameters(0.5f, 300, 150);
             ToolAgentNode toolAgentNode = new ToolAgentNode("toolAgentNode", underlyingToolAgent, toolAgentNodeSystemPrompt, toolAgentNodeModelParams);
@@ -238,22 +240,22 @@ public class ImplicitParallelismAndToolAgentTest {
             assertNotNull(compiledWorkflow, "Compiled workflow should not be null");
             log.info(ANSI_CYAN + "Tool Agent Workflow compiled successfully." + ANSI_RESET);
 
+            WorkflowConfig workflowConfig = new WorkflowConfig(uniqueTestTenantId, PersistenceMode.REDIS);
+            workflowConfig.setRepository(redisWorkflowConfigRepository);
+            workflowConfig.activateToolMethods(WeatherToolService.class.getName(), Arrays.asList("getWeather")); 
+            workflowConfig.save();
+            log.info(ANSI_CYAN + "WorkflowConfig created, tools activated, and saved. Tenant: {}" + ANSI_RESET, workflowConfig.getTenantId());
+
             AgentState initialState = new AgentState(uniqueTestTenantId, uniqueTestThreadId, PersistenceMode.REDIS);
             initialState.set("initial_message", "What is the weather like in London?");
             initialState.addChatMessage(new ChatMessage(ChatMessage.Role.USER, "What is the weather like in London?"));
             log.info(ANSI_CYAN + "Initial agent state created for Tool Agent workflow execution." + ANSI_RESET);
 
-            WorkflowConfig workflowConfig = new WorkflowConfig(uniqueTestTenantId, uniqueTestThreadId, PersistenceMode.REDIS);
-            workflowConfig.setRepository(redisWorkflowConfigRepository);
-            workflowConfig.activateToolMethods(WeatherToolService.class.getName(), Arrays.asList("getWeather")); 
-            workflowConfig.save();
-            log.info(ANSI_CYAN + "WorkflowConfig created and saved to Redis for tenant: {}, thread: {}" + ANSI_RESET, uniqueTestTenantId, uniqueTestThreadId);
-
             AgentState finalState = compiledWorkflow.execute(initialState, workflowConfig);
             assertNotNull(finalState, "Final state should not be null after workflow execution.");
             log.info(ANSI_GREEN + "Tool Agent Workflow execution completed. Final state tenant: {}, thread: {}" + ANSI_RESET, finalState.getTenantId(), finalState.getThreadId());
-
             Optional<AgentState> retrievedStateOptional = redisAgentStateRepository.findById(uniqueTestTenantId, uniqueTestThreadId);
+
             assertTrue(retrievedStateOptional.isPresent(), "AgentState should be found in Redis.");
             AgentState retrievedStateFromRedis = retrievedStateOptional.get();
             assertNotNull(retrievedStateFromRedis, "Retrieved state from Redis should not be null.");
@@ -277,12 +279,11 @@ public class ImplicitParallelismAndToolAgentTest {
                                  msg.getContent() != null && !msg.getContent().isEmpty()); 
             assertTrue(toolResponseFound, "Tool response message for 'WeatherToolService.getWeather' should be present.");
 
-            Optional<WorkflowConfig> retrievedWorkflowConfigOptional = redisWorkflowConfigRepository.findById(uniqueTestTenantId, uniqueTestThreadId);
+            Optional<WorkflowConfig> retrievedWorkflowConfigOptional = redisWorkflowConfigRepository.findById(uniqueTestTenantId);
             assertTrue(retrievedWorkflowConfigOptional.isPresent(), "WorkflowConfig should be found in Redis.");
             WorkflowConfig retrievedWorkflowConfig = retrievedWorkflowConfigOptional.get();
             assertNotNull(retrievedWorkflowConfig, "Retrieved WorkflowConfig from Redis should not be null.");
             assertEquals(uniqueTestTenantId, retrievedWorkflowConfig.getTenantId(), "WorkflowConfig Tenant ID should match.");
-            assertEquals(uniqueTestThreadId, retrievedWorkflowConfig.getThreadId(), "WorkflowConfig Thread ID should match.");
             assertEquals(PersistenceMode.REDIS, retrievedWorkflowConfig.getPersistenceMode(), "WorkflowConfig PersistenceMode should be REDIS.");
             assertTrue(retrievedWorkflowConfig.getConfiguredToolServices().containsKey(WeatherToolService.class.getName()), "WeatherToolService should be configured in retrieved WorkflowConfig.");
             assertEquals(Arrays.asList("getWeather"), retrievedWorkflowConfig.getConfiguredToolServices().get(WeatherToolService.class.getName()), "Activated methods for WeatherToolService should match in retrieved WorkflowConfig.");
@@ -297,7 +298,7 @@ public class ImplicitParallelismAndToolAgentTest {
                     log.info(ANSI_BLUE + "--- Cleaning up Redis key: " + agentStateKey + " --- " + ANSI_RESET);
                     redisConnection.sync().del(agentStateKey);
 
-                    String workflowConfigKey = "veyflow:workflow_config:" + uniqueTestTenantId + ":" + uniqueTestThreadId; 
+                    String workflowConfigKey = "veyflow:workflow_config:" + uniqueTestTenantId; 
                     log.info(ANSI_BLUE + "--- Cleaning up Redis key: " + workflowConfigKey + " --- " + ANSI_RESET);
                     redisConnection.sync().del(workflowConfigKey);
 

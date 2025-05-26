@@ -16,29 +16,26 @@ public interface WorkflowConfigRepository {
     void save(WorkflowConfig config);
 
     /**
-     * Finds a WorkflowConfig by its tenant ID and thread ID.
+     * Finds a WorkflowConfig by its tenant ID.
      *
      * @param tenantId The tenant ID.
-     * @param threadId The thread ID.
      * @return An {@link Optional} containing the found WorkflowConfig, or {@link Optional#empty()} if not found.
      */
-    Optional<WorkflowConfig> findById(String tenantId, String threadId);
+    Optional<WorkflowConfig> findById(String tenantId);
 
     /**
-     * Deletes a WorkflowConfig by its tenant ID and thread ID.
+     * Deletes a WorkflowConfig by its tenant ID.
      * 
      * @param tenantId The tenant ID.
-     * @param threadId The thread ID.
      * @return true if the config was deleted, false otherwise (e.g., if not found).
      */
-    boolean delete(String tenantId, String threadId);
+    boolean delete(String tenantId);
 
     /**
-     * Checks if a WorkflowConfig exists for the given tenantId and threadId.
+     * Checks if a WorkflowConfig exists for the given tenantId.
      *
      * @param tenantId The ID of the tenant.
-     * @param threadId The ID of the conversation thread.
      * @return true if the config exists, false otherwise.
      */
-    boolean exists(String tenantId, String threadId);
+    boolean exists(String tenantId);
 }

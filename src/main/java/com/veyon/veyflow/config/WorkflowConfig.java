@@ -22,7 +22,6 @@ public class WorkflowConfig {
     private static final Logger log = LoggerFactory.getLogger(WorkflowConfig.class);
 
     private String tenantId;
-    private String threadId;
     private PersistenceMode persistenceMode;
 
     // Map<ServiceClassName, List<MethodName>>
@@ -44,23 +43,20 @@ public class WorkflowConfig {
      * Constructor for creating a WorkflowConfig with specific identifiers.
      *
      * @param tenantId The tenant ID.
-     * @param threadId The thread ID.
      */
-    public WorkflowConfig(String tenantId, String threadId) {
+    public WorkflowConfig(String tenantId) {
         this();
         this.tenantId = tenantId;
-        this.threadId = threadId;
     }
 
     /**
      * Constructor for creating a WorkflowConfig with specific identifiers and persistence mode.
      *
      * @param tenantId The tenant ID.
-     * @param threadId The thread ID.
      * @param persistenceMode The persistence mode.
      */
-    public WorkflowConfig(String tenantId, String threadId, PersistenceMode persistenceMode) {
-        this(tenantId, threadId);
+    public WorkflowConfig(String tenantId, PersistenceMode persistenceMode) {
+        this(tenantId);
         this.persistenceMode = (persistenceMode != null) ? persistenceMode : PersistenceMode.IN_MEMORY;
         // Initial state is not dirty from constructor
     }
@@ -80,33 +76,33 @@ public class WorkflowConfig {
 
     public void save() {
         if (repository == null) {
-            log.warn("Repository not set, cannot save WorkflowConfig for tenant {} thread {}.", tenantId, threadId);
+            log.warn("Repository not set, cannot save WorkflowConfig for tenant {}.", tenantId);
             // Optionally, throw new IllegalStateException("Repository not set.");
             return;
         }
 
         if (persistenceMode == PersistenceMode.IN_MEMORY) {
-            log.debug("PersistenceMode is IN_MEMORY, explicit save operation to external store skipped for WorkflowConfig tenant {} thread {}.", tenantId, threadId);
+            log.debug("PersistenceMode is IN_MEMORY, explicit save operation to external store skipped for WorkflowConfig tenant {}.", tenantId);
             // If you want InMemoryRepository to also clear dirty flag upon any 'save' call:
             // if (isDirty) { repository.save(this); this.isDirty = false; }
             return;
         }
 
-        if (persistenceMode == PersistenceMode.REDIS && (tenantId == null || threadId == null || tenantId.isBlank() || threadId.isBlank())) {
-            throw new IllegalStateException("Cannot save to REDIS without a valid tenantId and threadId.");
+        if (persistenceMode == PersistenceMode.REDIS && (tenantId == null || tenantId.isBlank())) {
+            throw new IllegalStateException("Cannot save to REDIS without a valid tenantId.");
         }
 
         if (isDirty) {
             try {
-                log.info("Saving dirty WorkflowConfig for tenant {} thread {} with mode {}.", tenantId, threadId, persistenceMode);
+                log.info("Saving dirty WorkflowConfig for tenant {} with mode {}.", tenantId, persistenceMode);
                 repository.save(this);
                 this.isDirty = false; // Reset dirty flag after successful save
             } catch (Exception e) {
-                log.error("Failed to save WorkflowConfig for tenant {} thread {}: {}", tenantId, threadId, e.getMessage(), e);
+                log.error("Failed to save WorkflowConfig for tenant {}: {}", tenantId, e.getMessage(), e);
                 // Depending on policy, we might want to keep isDirty=true if save fails, or rethrow
             }
         } else {
-            log.debug("WorkflowConfig for tenant {} thread {} is not dirty, save operation skipped.", tenantId, threadId);
+            log.debug("WorkflowConfig for tenant {} is not dirty, save operation skipped.", tenantId);
         }
     }
 
@@ -118,17 +114,6 @@ public class WorkflowConfig {
     public void setTenantId(String tenantId) {
         if (this.tenantId == null || !this.tenantId.equals(tenantId)) {
             this.tenantId = tenantId;
-            this.isDirty = true;
-        }
-    }
-
-    public String getThreadId() {
-        return threadId;
-    }
-
-    public void setThreadId(String threadId) {
-        if (this.threadId == null || !this.threadId.equals(threadId)) {
-            this.threadId = threadId;
             this.isDirty = true;
         }
     }

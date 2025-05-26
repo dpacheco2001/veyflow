@@ -3,7 +3,6 @@ package com.veyon.veyflow;
 import com.veyon.veyflow.config.RedisWorkflowConfigRepository;
 import com.veyon.veyflow.config.WorkflowConfig;
 import com.veyon.veyflow.state.PersistenceMode;
-import com.veyon.veyflow.WeatherToolService;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import org.junit.jupiter.api.AfterEach;
@@ -35,7 +34,6 @@ public class WorkflowConfigPersistenceTest {
     private RedisWorkflowConfigRepository redisWorkflowConfigRepository;
 
     private String uniqueTestTenantId;
-    private String uniqueTestThreadId;
 
     @BeforeEach
     void setUp() {
@@ -47,8 +45,7 @@ public class WorkflowConfigPersistenceTest {
             log.info(ANSI_CYAN + "RedisWorkflowConfigRepository initialized." + ANSI_RESET);
 
             uniqueTestTenantId = "wc-test-tenant-" + UUID.randomUUID().toString();
-            uniqueTestThreadId = "wc-test-thread-" + UUID.randomUUID().toString();
-            log.info(ANSI_CYAN + "Generated Tenant ID: {}, Thread ID: {}" + ANSI_RESET, uniqueTestTenantId, uniqueTestThreadId);
+            log.info(ANSI_CYAN + "Generated Tenant ID: {}" + ANSI_RESET, uniqueTestTenantId);
         } catch (Exception e) {
             log.error(ANSI_YELLOW + "Failed to connect to Redis or setup test: {}" + ANSI_RESET, e.getMessage(), e);
             fail("Test setup failed due to Redis connection issues.", e);
@@ -61,7 +58,7 @@ public class WorkflowConfigPersistenceTest {
         if (redisConnection != null) {
             try {
                 // Clean up the test entry from Redis
-                String redisKey = "veyflow:workflow_config:" + uniqueTestTenantId + ":" + uniqueTestThreadId;
+                String redisKey = "veyflow:workflow_config:" + uniqueTestTenantId;
                 log.info(ANSI_CYAN + "Attempting to clean up Redis key: {}" + ANSI_RESET, redisKey);
                 Long deletedCount = redisConnection.sync().del(redisKey);
                 if (deletedCount != null && deletedCount > 0) {
@@ -72,8 +69,8 @@ public class WorkflowConfigPersistenceTest {
                 redisConnection.close();
                 log.info(ANSI_CYAN + "Redis connection closed." + ANSI_RESET);
             } catch (Exception e) {
-                log.warn(ANSI_YELLOW + "Could not clean up Redis key or close connection for tenant {} and thread {}: {}" + ANSI_RESET, 
-                        uniqueTestTenantId, uniqueTestThreadId, e.getMessage(), e);
+                log.warn(ANSI_YELLOW + "Could not clean up Redis key or close connection for tenant {}: {}" + ANSI_RESET, 
+                        uniqueTestTenantId, e.getMessage(), e);
             }
         }
         if (testRedisClient != null) {
@@ -88,14 +85,14 @@ public class WorkflowConfigPersistenceTest {
         log.info(ANSI_BLUE + "--- Starting WorkflowConfig Redis Persistence Test --- " + ANSI_RESET);
 
         // 1. Create and configure WorkflowConfig
-        WorkflowConfig originalConfig = new WorkflowConfig(uniqueTestTenantId, uniqueTestThreadId, PersistenceMode.REDIS);
+        WorkflowConfig originalConfig = new WorkflowConfig(uniqueTestTenantId, PersistenceMode.REDIS);
         originalConfig.setRepository(redisWorkflowConfigRepository);
 
         String weatherServiceName = WeatherToolService.class.getName();
         List<String> weatherMethods = Arrays.asList("getWeather", "getForecast");
         originalConfig.activateToolMethods(weatherServiceName, weatherMethods);
-        log.info(ANSI_CYAN + "Original WorkflowConfig created and tools activated. Tenant: {}, Thread: {}, isDirty: {}" + ANSI_RESET, 
-                 originalConfig.getTenantId(), originalConfig.getThreadId(), originalConfig.isDirty());
+        log.info(ANSI_CYAN + "Original WorkflowConfig created and tools activated. Tenant: {}, isDirty: {}" + ANSI_RESET, 
+                 originalConfig.getTenantId(), originalConfig.isDirty());
 
         // 2. Save WorkflowConfig
         assertTrue(originalConfig.isDirty(), "Config should be dirty after activating tools.");
@@ -104,7 +101,7 @@ public class WorkflowConfigPersistenceTest {
         assertFalse(originalConfig.isDirty(), "Config should not be dirty after successful save.");
 
         // 3. Retrieve WorkflowConfig from Redis
-        Optional<WorkflowConfig> retrievedConfigOptional = redisWorkflowConfigRepository.findById(uniqueTestTenantId, uniqueTestThreadId);
+        Optional<WorkflowConfig> retrievedConfigOptional = redisWorkflowConfigRepository.findById(uniqueTestTenantId);
         assertTrue(retrievedConfigOptional.isPresent(), "WorkflowConfig should be found in Redis.");
         WorkflowConfig retrievedConfig = retrievedConfigOptional.get();
         assertNotNull(retrievedConfig, "Retrieved WorkflowConfig from Redis should not be null.");
@@ -112,7 +109,6 @@ public class WorkflowConfigPersistenceTest {
 
         // 4. Verify properties of the retrieved WorkflowConfig
         assertEquals(uniqueTestTenantId, retrievedConfig.getTenantId(), "Tenant ID should match.");
-        assertEquals(uniqueTestThreadId, retrievedConfig.getThreadId(), "Thread ID should match.");
         assertEquals(PersistenceMode.REDIS, retrievedConfig.getPersistenceMode(), "PersistenceMode should be REDIS.");
 
         Map<String, List<String>> retrievedTools = retrievedConfig.getConfiguredToolServices();
@@ -129,9 +125,9 @@ public class WorkflowConfigPersistenceTest {
         log.info(ANSI_CYAN + "Called save() on non-dirty retrieved config. isDirty: {}" + ANSI_RESET, retrievedConfig.isDirty());
 
         // 6. Test deletion (implicitly tested by tearDown, but can be explicit too)
-        boolean deleted = redisWorkflowConfigRepository.delete(uniqueTestTenantId, uniqueTestThreadId);
+        boolean deleted = redisWorkflowConfigRepository.delete(uniqueTestTenantId);
         assertTrue(deleted, "WorkflowConfig should be successfully deleted from Redis.");
-        Optional<WorkflowConfig> deletedConfigOptional = redisWorkflowConfigRepository.findById(uniqueTestTenantId, uniqueTestThreadId);
+        Optional<WorkflowConfig> deletedConfigOptional = redisWorkflowConfigRepository.findById(uniqueTestTenantId);
         assertFalse(deletedConfigOptional.isPresent(), "WorkflowConfig should not be found after deletion.");
         log.info(ANSI_GREEN + "WorkflowConfig successfully deleted from Redis as part of the test." + ANSI_RESET);
 
