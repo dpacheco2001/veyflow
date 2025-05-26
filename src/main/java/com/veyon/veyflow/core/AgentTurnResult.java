@@ -8,12 +8,18 @@ import java.util.List;
  */
 public class AgentTurnResult {
     private final String finalMessage;
-    private final List<ChatMessage> chatHistory;
+    private final List<ChatMessage> chatHistory; // Full history
+    private final List<ChatMessage> newMessages; // New messages in this turn
     private final List<ToolExecutionRecord> toolExecutionMetadata;
 
-    public AgentTurnResult(String finalMessage, List<ChatMessage> chatHistory, List<ToolExecutionRecord> toolExecutionMetadata) {
+    public AgentTurnResult(
+            String finalMessage, 
+            List<ChatMessage> chatHistory, 
+            List<ChatMessage> newMessages, 
+            List<ToolExecutionRecord> toolExecutionMetadata) {
         this.finalMessage = finalMessage;
         this.chatHistory = chatHistory;
+        this.newMessages = newMessages; 
         this.toolExecutionMetadata = toolExecutionMetadata;
     }
 
@@ -23,6 +29,14 @@ public class AgentTurnResult {
 
     public List<ChatMessage> getChatHistory() {
         return chatHistory;
+    }
+
+    /**
+     * Gets only the new messages generated during this execution turn.
+     * This includes assistant responses and tool responses for this turn.
+     */
+    public List<ChatMessage> getNewMessages() { 
+        return newMessages;
     }
 
     public List<ToolExecutionRecord> getToolExecutionMetadata() {

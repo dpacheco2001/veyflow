@@ -1,9 +1,6 @@
 package com.veyon.veyflow.state;
 
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.List;
@@ -17,8 +14,6 @@ import java.util.Set;
 public class AgentState {
     private Map<String, Object> values;
     private List<ChatMessage> chatMessages;
-    private JsonObject toolCalls;
-    private JsonObject toolResponses;
     private String currentNode;
     private String previousNode;
     private String threadId;
@@ -30,8 +25,6 @@ public class AgentState {
     public AgentState() {
         this.values = new HashMap<>();
         this.chatMessages = new ArrayList<>();
-        this.toolCalls = new JsonObject();
-        this.toolResponses = new JsonObject();
         this.currentNode = "";
         this.previousNode = "";
         this.tenantId = "";
@@ -110,46 +103,6 @@ public class AgentState {
      */
     public AgentState addChatMessage(ChatMessage message) {
         this.chatMessages.add(message);
-        return this;
-    }
-
-    /**
-     * Get the tool calls.
-     * 
-     * @return Tool calls as JsonObject
-     */
-    public JsonObject getToolCalls() {
-        return toolCalls;
-    }
-
-    /**
-     * Set the tool calls.
-     * 
-     * @param toolCalls Tool calls as JsonObject
-     * @return This state instance for chaining
-     */
-    public AgentState setToolCalls(JsonObject toolCalls) {
-        this.toolCalls = toolCalls;
-        return this;
-    }
-
-    /**
-     * Get the tool responses.
-     * 
-     * @return Tool responses as JsonObject
-     */
-    public JsonObject getToolResponses() {
-        return toolResponses;
-    }
-
-    /**
-     * Set the tool responses.
-     * 
-     * @param toolResponses Tool responses as JsonObject
-     * @return This state instance for chaining
-     */
-    public AgentState setToolResponses(JsonObject toolResponses) {
-        this.toolResponses = toolResponses;
         return this;
     }
 

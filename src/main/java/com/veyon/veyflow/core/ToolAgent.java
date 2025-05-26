@@ -20,11 +20,13 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+//This object updates your state with the tool calls and responses automatically, that cuz
+//this object doesnt CLONE the state object, it just updates it.
 
 public class ToolAgent {
 
@@ -51,10 +53,10 @@ public class ToolAgent {
     ) {
         AgentState currentState = initialState; 
         List<AgentTurnResult.ToolExecutionRecord> allToolExecutionRecords = new ArrayList<>();
+        List<ChatMessage> newMessagesThisTurn = new ArrayList<>(); // Added: List to collect new messages
         String finalAssistantMessage = null;
         int currentToolIteration = 0;
 
-        // Determine active tool services and declarations
         List<ToolService> activeToolServices = getActiveToolServices(workflowConfig);
         List<Tool> functionDeclarations = buildFunctionDeclarations(currentState.getTenantId(), activeToolServices, workflowConfig);
 
@@ -96,117 +98,108 @@ public class ToolAgent {
             
             // Construct assistant ChatMessage using ModelTurnResponse.getAssistantContent() and setToolCalls().
             String assistantContent = modelTurnResponse.getAssistantContent();
-            List<ToolCall> toolCallsFromModel = modelTurnResponse.getToolCalls(); // Keep this for clarity or use assistantMessage.getToolCalls() later
+            List<ToolCall> toolCallsFromModel = modelTurnResponse.getToolCalls();
             
             ChatMessage assistantMessage = new ChatMessage(ChatMessage.Role.ASSISTANT, assistantContent);
             if (toolCallsFromModel != null && !toolCallsFromModel.isEmpty()) {
                 assistantMessage.setToolCalls(toolCallsFromModel);
             }
             currentState.addChatMessage(assistantMessage);
+            newMessagesThisTurn.add(assistantMessage); // Added: Collect assistant message
 
-            List<ToolCall> toolCallsThisTurn = modelTurnResponse.getToolCalls(); // Use directly from modelResponse
-            if (toolCallsThisTurn == null || toolCallsThisTurn.isEmpty()) {
-                log.info("ToolAgent execute: No tool calls in iteration {}, or max iterations reached. Finalizing. Tenant: {}", currentToolIteration, currentState.getTenantId());
-                finalAssistantMessage = assistantMessage.getContent();
-                break; 
-            }
+            if (toolCallsFromModel != null && !toolCallsFromModel.isEmpty()) {
+                finalAssistantMessage = null; // Not final yet, as tools will be called
+                log.info("ToolAgent execute: Detected {} tool calls in iteration {} for tenant {}.", toolCallsFromModel.size(), currentToolIteration, currentState.getTenantId());
+                // List<ChatMessage> toolResponses = new ArrayList<>(); // Not needed here, add directly to newMessagesThisTurn and currentState
 
-            log.info("ToolAgent execute: Detected {} tool calls in iteration {} for tenant {}.", toolCallsThisTurn.size(), currentToolIteration, currentState.getTenantId());
-            List<ChatMessage> toolResponses = new ArrayList<>();
+                for (ToolCall toolCall : toolCallsFromModel) {
+                    String toolArgsJson = toolCall.getParameters() != null ? gson.toJson(toolCall.getParameters()) : "{}";
+                    log.info("Executing tool: {} with ID: {} and arguments: {}", toolCall.getName(), toolCall.getId(), toolArgsJson);
 
-            for (ToolCall toolCall : toolCallsThisTurn) {
-                String toolArgsJson = toolCall.getParameters() != null ? gson.toJson(toolCall.getParameters()) : "{}";
-                log.info("Executing tool: {} with ID: {} and arguments: {}", toolCall.getName(), toolCall.getId(), toolArgsJson);
+                    String fullToolName = toolCall.getName();
+                    String serviceClassNameFromTool = "";
+                    String methodNameFromTool = "";
 
-                String fullToolName = toolCall.getName();
-                String serviceClassNameFromTool = "";
-                String methodNameFromTool = "";
+                    // Analizamos el nombre de la herramienta asumiendo formato SimpleClassName_MethodName
+                    int separatorIndex = fullToolName.lastIndexOf('_');
+                    if (separatorIndex == -1) {
+                        separatorIndex = fullToolName.lastIndexOf('.');
+                    }
 
-                // Analizamos el nombre de la herramienta asumiendo formato SimpleClassName_MethodName
-                int separatorIndex = fullToolName.lastIndexOf('_');
-                if (separatorIndex == -1) {
-                    separatorIndex = fullToolName.lastIndexOf('.');
-                }
+                    if (separatorIndex != -1 && separatorIndex < fullToolName.length() - 1) {
+                        serviceClassNameFromTool = fullToolName.substring(0, separatorIndex);
+                        methodNameFromTool = fullToolName.substring(separatorIndex + 1);
+                    } else {
+                        // Si no hay un separador válido, log error
+                        log.error("Could not parse service class name and method name from tool name: '{}'. Expected 'ClassName_MethodName'.", fullToolName);
+                    }
 
-                if (separatorIndex != -1 && separatorIndex < fullToolName.length() - 1) {
-                    serviceClassNameFromTool = fullToolName.substring(0, separatorIndex);
-                    methodNameFromTool = fullToolName.substring(separatorIndex + 1);
-                } else {
-                    // Si no hay un separador válido, log error
-                    log.error("Could not parse service class name and method name from tool name: '{}'. Expected 'ClassName_MethodName'.", fullToolName);
-                }
+                    ToolService service = findToolServiceByClassName(activeToolServices, serviceClassNameFromTool);
+                    Object result = null;
+                    String toolExecutionResultContent = "";
 
-                ToolService service = findToolServiceByClassName(activeToolServices, serviceClassNameFromTool);
-                Object result = null;
-                String toolExecutionResultContent = "";
-
-                if (service != null && !methodNameFromTool.isEmpty()) {
-                    try {
-                        Method methodToExecute = null;
-                        for (Method m : service.getClass().getMethods()) {
-                            if (m.getName().equals(methodNameFromTool)) {
-                                methodToExecute = m;
-                                break;
-                            }
-                        }
-                        if (methodToExecute == null) throw new NoSuchMethodException("Method " + methodNameFromTool + " not found in service " + serviceClassNameFromTool);
-
-                        java.lang.reflect.Parameter[] methodParams = methodToExecute.getParameters();
-                        Object[] argsToPass = new Object[methodParams.length];
-                        JsonObject llmArgs = toolCall.getParameters();
-
-                        for (int i = 0; i < methodParams.length; i++) {
-                            java.lang.reflect.Parameter param = methodParams[i];
-                            if (param.getType() == AgentState.class) {
-                                argsToPass[i] = currentState;
-                            } else {
-                                String paramName = param.getName();
-                                if (llmArgs != null && llmArgs.has(paramName)) {
-                                    argsToPass[i] = gson.fromJson(llmArgs.get(paramName), param.getType());
-                                } else {
-                                    if (param.getType().isPrimitive()) throw new IllegalArgumentException("Missing required primitive parameter: " + paramName);
-                                    argsToPass[i] = null;
+                    if (service != null && !methodNameFromTool.isEmpty()) {
+                        try {
+                            Method methodToExecute = null;
+                            for (Method m : service.getClass().getMethods()) {
+                                if (m.getName().equals(methodNameFromTool)) {
+                                    methodToExecute = m;
+                                    break;
                                 }
                             }
+                            if (methodToExecute == null) throw new NoSuchMethodException("Method " + methodNameFromTool + " not found in service " + serviceClassNameFromTool);
+
+                            java.lang.reflect.Parameter[] methodParams = methodToExecute.getParameters();
+                            Object[] argsToPass = new Object[methodParams.length];
+                            JsonObject llmArgs = toolCall.getParameters();
+
+                            for (int i = 0; i < methodParams.length; i++) {
+                                java.lang.reflect.Parameter param = methodParams[i];
+                                if (param.getType() == AgentState.class) {
+                                    argsToPass[i] = currentState;
+                                } else {
+                                    String paramName = param.getName();
+                                    if (llmArgs != null && llmArgs.has(paramName)) {
+                                        argsToPass[i] = gson.fromJson(llmArgs.get(paramName), param.getType());
+                                    } else {
+                                        if (param.getType().isPrimitive()) throw new IllegalArgumentException("Missing required primitive parameter: " + paramName);
+                                        argsToPass[i] = null;
+                                    }
+                                }
+                            }
+                            result = methodToExecute.invoke(service, argsToPass);
+                            toolExecutionResultContent = (result != null) ? gson.toJson(result) : "";
+                        } catch (Exception e) {
+                            log.error("Error executing tool {}: {}", toolCall.getName(), e.getMessage(), e);
+                            toolExecutionResultContent = "Error: " + e.getMessage();
                         }
-                        result = methodToExecute.invoke(service, argsToPass);
-                        toolExecutionResultContent = (result != null) ? gson.toJson(result) : "";
-                    } catch (Exception e) {
-                        log.error("Error executing tool {}: {}", toolCall.getName(), e.getMessage(), e);
-                        toolExecutionResultContent = "Error: " + e.getMessage();
+                    } else {
+                        toolExecutionResultContent = "Error: Service for " + toolCall.getName() + " not found or method name invalid.";
+                        log.error(toolExecutionResultContent);
                     }
-                } else {
-                    toolExecutionResultContent = "Error: Service for " + toolCall.getName() + " not found or method name invalid.";
-                    log.error(toolExecutionResultContent);
+                    
+                    // Use new ChatMessage(toolCall.getId(), ChatMessage.Role.TOOL, toolContent).setToolName() for tool responses.
+                    ChatMessage toolResponseMessage = new ChatMessage(toolCall.getId(), ChatMessage.Role.TOOL, toolExecutionResultContent);
+                    toolResponseMessage.setToolName(toolCall.getName());
+                    
+                    currentState.addChatMessage(toolResponseMessage);
+                    newMessagesThisTurn.add(toolResponseMessage); // Added: Collect tool response message
+                    allToolExecutionRecords.add(new AgentTurnResult.ToolExecutionRecord(toolCall.getName(), toolArgsJson, toolExecutionResultContent));
                 }
-                
-                // Use new ChatMessage(toolCall.getId(), ChatMessage.Role.TOOL, toolContent).setToolName() for tool responses.
-                ChatMessage toolResponseMessage = new ChatMessage(toolCall.getId(), ChatMessage.Role.TOOL, toolExecutionResultContent);
-                toolResponseMessage.setToolName(toolCall.getName());
-                toolResponses.add(toolResponseMessage);
-                
-                // Use new AgentTurnResult.ToolExecutionRecord(toolName, args, result) constructor.
-                allToolExecutionRecords.add(new AgentTurnResult.ToolExecutionRecord(toolCall.getName(), toolArgsJson, toolExecutionResultContent));
+            } else {
+                finalAssistantMessage = assistantContent; // Use content from model directly
+                // No new messages to add here beyond what was already added from modelTurnResponse.getAssistantMessage()
+                break; // Exit loop as we have a final text response
             }
-            // Iterate to add multiple tool response ChatMessages to AgentState.
-            for (ChatMessage toolRespMsg : toolResponses) {
-                currentState.addChatMessage(toolRespMsg);
-            }
+        }
+        
+        // Ensure chat history in AgentState is what we want to return in AgentTurnResult
+        List<ChatMessage> finalChatHistory = currentState.getChatMessages();
 
-            if (currentToolIteration >= MAX_TOOL_ITERATIONS_PER_EXECUTE) {
-                log.warn("ToolAgent execute: Reached max tool iterations ({}) for tenant {}. Returning current state without further LLM calls.", MAX_TOOL_ITERATIONS_PER_EXECUTE, currentState.getTenantId());
-                finalAssistantMessage = assistantMessage.getContent(); // The LLM was about to ask for more tools or give a partial response
-                break;
-            }
-        } 
-
-        // Use the existing AgentTurnResult constructor
-        // This means tenantId, detailed turnCount, rawModelResponse, token counts are not set here
-        // AgentTurnResult may need to be enhanced later if this information is required.
-        return new AgentTurnResult(finalAssistantMessage, currentState.getChatMessages(), allToolExecutionRecords);
+        return new AgentTurnResult(finalAssistantMessage, finalChatHistory, newMessagesThisTurn, allToolExecutionRecords);
     }
 
-   private List<ToolService> getActiveToolServices(WorkflowConfig workflowConfig) {
+    private List<ToolService> getActiveToolServices(WorkflowConfig workflowConfig) {
         List<ToolService> availableServices = new ArrayList<>();
         
         // Si no hay workflowConfig, no hay servicios activos
