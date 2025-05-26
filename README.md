@@ -504,6 +504,7 @@ WorkflowConfig workflowConfig = new WorkflowConfig("acme_corp", PersistenceMode.
 // Activar herramientas específicas (opcional, si el workflow usa ToolAgent)
 workflowConfig.activateToolMethod(MyCalculatorService.class.getSimpleName(), "add");
 workflowConfig.activateToolMethod(MyCalculatorService.class.getSimpleName(), "subtract");
+```
 
 ### 3. Compilación del Workflow (`workflow.compile()`)
 
