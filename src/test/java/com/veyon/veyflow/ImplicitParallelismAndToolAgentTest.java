@@ -149,48 +149,48 @@ public class ImplicitParallelismAndToolAgentTest {
         }
     }
 
-    // @Test
-    // void testImplicitParallelExecution() {
-    //     AgentWorkflow workflow = new AgentWorkflow("entry"); 
-    //     AgentNode entryNode = new EchoNode("entry");
-    //     AgentNode nodeA = new EchoNode("nodeA");
-    //     AgentNode nodeB = new EchoNode("nodeB");
-    //     AgentNode exitNode = new EchoNode("exit");
+    @Test
+    void testImplicitParallelExecution() {
+        AgentWorkflow workflow = new AgentWorkflow("entry"); 
+        AgentNode entryNode = new EchoNode("entry");
+        AgentNode nodeA = new EchoNode("nodeA");
+        AgentNode nodeB = new EchoNode("nodeB");
+        AgentNode exitNode = new EchoNode("exit");
 
-    //     workflow.addNode(entryNode);
-    //     workflow.addNode(nodeA);
-    //     workflow.addNode(nodeB);
-    //     workflow.addNode(exitNode);
+        workflow.addNode(entryNode);
+        workflow.addNode(nodeA);
+        workflow.addNode(nodeB);
+        workflow.addNode(exitNode);
 
-    //     workflow.addEdge("entry", "nodeA"); 
-    //     workflow.addEdge("entry", "nodeB"); 
-    //     workflow.addEdge("nodeA", "exit");
-    //     workflow.addEdge("nodeB", "exit");
+        workflow.addEdge("entry", "nodeA"); 
+        workflow.addEdge("entry", "nodeB"); 
+        workflow.addEdge("nodeA", "exit");
+        workflow.addEdge("nodeB", "exit");
 
-    //     CompileConfig compileConfig = CompileConfig.builder().build(); 
-    //     CompiledWorkflow compiledWorkflow = workflow.compile(compileConfig);
+        CompileConfig compileConfig = CompileConfig.builder().build(); 
+        CompiledWorkflow compiledWorkflow = workflow.compile(compileConfig);
 
-    //     AgentState initialState = new AgentState(TENANT_ID);
-    //     initialState.set("input", "Start");
-    //     initialState.set("entry_input", "Initial message for entry node");
+        AgentState initialState = new AgentState(TENANT_ID);
+        initialState.set("input", "Start");
+        initialState.set("entry_input", "Initial message for entry node");
 
-    //     AgentState finalState = compiledWorkflow.execute(initialState, new WorkflowConfig());
+        AgentState finalState = compiledWorkflow.execute(initialState, new WorkflowConfig());
 
-    //     assertTrue(initialState.get("entry_output") != null, "Entry node should have run");
-    //     assertTrue(initialState.get("nodeA_output") != null, "NodeA should have run");
-    //     assertTrue(initialState.get("nodeB_output") != null, "NodeB should have run");
-    //     assertTrue(initialState.get("exit_output") != null, "Exit node should have run");
+        assertTrue(initialState.get("entry_output") != null, "Entry node should have run");
+        assertTrue(initialState.get("nodeA_output") != null, "NodeA should have run");
+        assertTrue(initialState.get("nodeB_output") != null, "NodeB should have run");
+        assertTrue(initialState.get("exit_output") != null, "Exit node should have run");
 
-    //     @SuppressWarnings("unchecked")
-    //     List<String> executionPath = (List<String>) finalState.get("execution_path");
-    //     if (executionPath == null) executionPath = new ArrayList<>();
+        @SuppressWarnings("unchecked")
+        List<String> executionPath = (List<String>) finalState.get("execution_path");
+        if (executionPath == null) executionPath = new ArrayList<>();
         
-    //     System.out.println("Execution path: " + executionPath);
-    //     assertEquals("entry_output", executionPath.get(0));
-    //     assertTrue(executionPath.contains("nodeA_output"));
-    //     assertTrue(executionPath.contains("nodeB_output"));
-    //     assertEquals("exit_output", executionPath.get(executionPath.size() - 1));
-    // }
+        System.out.println("Execution path: " + executionPath);
+        assertEquals("entry_output", executionPath.get(0));
+        assertTrue(executionPath.contains("nodeA_output"));
+        assertTrue(executionPath.contains("nodeB_output"));
+        assertEquals("exit_output", executionPath.get(executionPath.size() - 1));
+    }
 
     // @Test
     // void testToolAgentWithRedisPersistence() {

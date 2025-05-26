@@ -15,6 +15,9 @@ import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Collections;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -86,57 +89,126 @@ public class AgentExecutor {
      * @return The final state after execution
      */
     public AgentState execute(AgentState state, WorkflowConfig workflowConfig) {
-        // Set the initial node
-        state.setCurrentNode(entryNode);
+        if (state.getCurrentNode() == null || state.getCurrentNode().isEmpty()) {
+             log.debug("execute: Initializing currentNode to entryNode: {}", entryNode);
+             state.setCurrentNode(entryNode);
+        }
         
-        // Execute nodes until we reach a node with no outgoing edges
+        int loopCount = 0; // Para detectar bucles excesivos
         while (state.getCurrentNode() != null && !state.getCurrentNode().isEmpty()) {
+            loopCount++;
+            if (loopCount > 100) { // Un umbral arbitrario, ajustar si es necesario
+                log.error("execute: Excessive loop count ({}) for state Tenant: {}, Thread: {}, currentNode: {}. Aborting.", loopCount, state.getTenantId(), state.getThreadId(), state.getCurrentNode());
+                throw new RuntimeException("Excessive loop count detected in AgentExecutor.execute for node " + state.getCurrentNode());
+            }
+
+            log.debug("execute: Loop iteration {}. CurrentNode BEFORE processing: {}", loopCount, state.getCurrentNode());
             String currentNodeName = state.getCurrentNode();
             AgentNode currentNode = nodes.get(currentNodeName);
             
             if (currentNode == null) {
-                log.error("Node not found: {}", currentNodeName);
+                log.error("Node not found: {}. Terminating loop.", currentNodeName);
+                state.setCurrentNode(null); // Ensure termination
                 break;
             }
             
             log.debug("Executing node: {}", currentNodeName);
-            
-            // Process the current node
-            state = currentNode.process(state, workflowConfig);
-            
-            // Get all routers for the current node
+            state = currentNode.process(state, workflowConfig); 
+            log.debug("execute: CurrentNode AFTER process, BEFORE routing: {} (Node {} processed state for Tenant: {}, Thread: {})", state.getCurrentNode(), currentNodeName, state.getTenantId(), state.getThreadId());
+
             List<NodeRouter> currentRouters = routers.get(currentNodeName);
             
             if (currentRouters == null || currentRouters.isEmpty()) {
-                // No routers means this is a terminal node for this path
-                log.debug("Terminal node reached or no routers defined for: {}", currentNodeName);
-                break;
-            }
-            
-            List<String> nextNodeNames = new ArrayList<>();
-            for (NodeRouter router : currentRouters) {
-                String nextNodeName = router.route(state, workflowConfig);
-                if (nextNodeName != null && !nextNodeName.isEmpty()) {
-                    nextNodeNames.add(nextNodeName);
+                log.debug("Terminal node reached or no routers defined for: {}. Setting currentNode to null.", currentNodeName);
+                state.setCurrentNode(null); 
+            } else {
+                List<String> nextNodeNames = new ArrayList<>();
+                for (NodeRouter router : currentRouters) {
+                    // Corregido: Usar router.route() que devuelve un solo String o null
+                    String nextNodeName = router.route(state, workflowConfig);
+                    if (nextNodeName != null && !nextNodeName.isEmpty()) {
+                        nextNodeNames.add(nextNodeName);
+                    }
+                }
+                
+                if (nextNodeNames.isEmpty()) {
+                    log.debug("No next nodes determined by routers for: {}. Setting currentNode to null.", currentNodeName);
+                    state.setCurrentNode(null); 
+                } else if (nextNodeNames.size() == 1) {
+                    log.debug("Linear transition from {} to {}.", currentNodeName, nextNodeNames.get(0));
+                    state.setCurrentNode(nextNodeNames.get(0));
+                } else { 
+                    // Fork: Execute multiple nodes in parallel
+                    log.info("Node {} is forking to: {}. Current state tenant: {}, thread: {}", currentNode.getName(), nextNodeNames, state.getTenantId(), state.getThreadId());
+                    String[] parallelExecutionTargets = nextNodeNames.toArray(new String[0]);
+                    executeParallel(state, workflowConfig, parallelExecutionTargets);
+                    log.info("Parallel execution of nodes {} completed and states merged. Determining join node. State tenant: {}, thread: {}", String.join(", ", parallelExecutionTargets), state.getTenantId(), state.getThreadId());
+
+                    // Determine the common successor (join node) of the parallel branches
+                    Set<String> commonSuccessors = null;
+                    boolean allBranchesHaveRoutableSuccessors = true;
+
+                    for (String parallelNodeName : parallelExecutionTargets) { 
+                        List<NodeRouter> branchRoutersList = routers.get(parallelNodeName);
+                        if (branchRoutersList != null && !branchRoutersList.isEmpty()) {
+                            Set<String> allSuccessorsForThisBranchNode = new HashSet<>();
+                            for (NodeRouter routerInstance : branchRoutersList) {
+                                Object rawRouteResult = routerInstance.route(state, workflowConfig); // 'state' is merged
+                                List<String> successorsFromOneRouter = null;
+                                if (rawRouteResult instanceof String) {
+                                    successorsFromOneRouter = Collections.singletonList((String) rawRouteResult);
+                                } else if (rawRouteResult instanceof List) {
+                                    // We need to ensure it's List<String>, not List of something else.
+                                    // This cast might still be risky if the list contains non-Strings, but aligns with expectation.
+                                    @SuppressWarnings("unchecked")
+                                    List<String> tempList = (List<String>) rawRouteResult;
+                                    successorsFromOneRouter = tempList;
+                                } else if (rawRouteResult == null) {
+                                    successorsFromOneRouter = Collections.emptyList();
+                                }
+
+                                if (successorsFromOneRouter != null && !successorsFromOneRouter.isEmpty()) { 
+                                    allSuccessorsForThisBranchNode.addAll(successorsFromOneRouter);
+                                }
+                            }
+
+                            if (!allSuccessorsForThisBranchNode.isEmpty()) {
+                                if (commonSuccessors == null) {
+                                    commonSuccessors = new HashSet<>(allSuccessorsForThisBranchNode);
+                                } else {
+                                    commonSuccessors.retainAll(allSuccessorsForThisBranchNode);
+                                }
+                            } else {
+                                // This branch has no successors according to all its routers
+                                log.debug("Branch {} has no successors from any of its routers after parallel execution.", parallelNodeName);
+                                allBranchesHaveRoutableSuccessors = false;
+                                break; 
+                            }
+                        } else {
+                             // No routers defined for this parallel node, means it's an end node for its branch.
+                             log.debug("Branch {} has no routers defined after parallel execution.", parallelNodeName);
+                             allBranchesHaveRoutableSuccessors = false;
+                             break;
+                        }
+                    }
+
+                    if (!allBranchesHaveRoutableSuccessors || commonSuccessors == null || commonSuccessors.isEmpty()) {
+                        log.info("Parallel branches completed, but no single common successor found or a branch ended. Ending workflow. State tenant: {}, thread: {}", state.getTenantId(), state.getThreadId());
+                        state.setCurrentNode(null); // End of workflow
+                    } else if (commonSuccessors.size() == 1) {
+                        String joinNode = commonSuccessors.iterator().next();
+                        log.info("Parallel branches joined. Next node is: {}. State tenant: {}, thread: {}", joinNode, state.getTenantId(), state.getThreadId());
+                        state.setCurrentNode(joinNode);
+                        // The while loop will continue with joinNode as currentNode
+                    } else { // commonSuccessors.size() > 1
+                        log.warn("Parallel branches joined, but multiple common successors found: {}. This scenario is not handled yet. Ending workflow. State tenant: {}, thread: {}", commonSuccessors, state.getTenantId(), state.getThreadId());
+                        state.setCurrentNode(null); // End of workflow
+                    }
                 }
             }
-            
-            if (nextNodeNames.isEmpty()) {
-                // No next node from any router, so we're done with this path
-                log.debug("No valid next node from any router for node: {}", currentNodeName);
-                break;
-            } else if (nextNodeNames.size() == 1) {
-                // Single next node, continue linearly
-                String nextNodeName = nextNodeNames.get(0);
-                log.debug("Routing from {} to {} (linear)", currentNodeName, nextNodeName);
-                state.setCurrentNode(nextNodeName);
-            } else {
-                // Multiple next nodes, execute in parallel
-                log.info("Forking parallel execution from {} to nodes: {}", currentNodeName, nextNodeNames);
-                executeParallel(state, workflowConfig, nextNodeNames.toArray(new String[0]));
-                break; // Stop current linear execution as it has forked
-            }
-        }
+            log.debug("execute: End of loop iteration {}. CurrentNode for next iteration check: {} (State Tenant: {}, Thread: {})", loopCount, state.getCurrentNode(), state.getTenantId(), state.getThreadId());
+        } 
+        log.debug("execute: Exited while loop. Final currentNode: {} (State Tenant: {}, Thread: {})", state.getCurrentNode(), state.getTenantId(), state.getThreadId());
         
         // After the loop, workflow execution is complete or has been interrupted.
         // Save the state if it's configured for REDIS persistence and a repository is available.
@@ -164,44 +236,60 @@ public class AgentExecutor {
      * @param targetNodes Array of target node names
      */
     private void executeParallel(AgentState state, WorkflowConfig workflowConfig, String... targetNodes) {
-        log.debug("Executing {} nodes in parallel", targetNodes.length);
+        log.debug("Executing {} nodes in parallel: {}", targetNodes.length, String.join(", ", targetNodes));
         
         List<CompletableFuture<AgentState>> futures = new ArrayList<>();
         
-        for (String targetNode : targetNodes) {
+        for (String targetNodeName : targetNodes) {
             CompletableFuture<AgentState> future = CompletableFuture.supplyAsync(() -> {
-                // Create a copy of the state for this branch
-                AgentState branchState = AgentState.fromJson(state.toJson());
-                branchState.setCurrentNode(targetNode);
+                AgentState branchState = AgentState.fromJson(state.toJson()); // Copia del estado *antes* de la ejecución de esta rama
+                // No establecemos currentNode aquí, ya que solo vamos a procesar el targetNodeName específico
+
+                AgentNode targetNode = nodes.get(targetNodeName);
+                if (targetNode == null) {
+                    log.error("executeParallel: Node not found for parallel execution: {}. Returning original branch state.", targetNodeName);
+                    return branchState; // o lanzar excepción
+                }
                 
-                // Execute this branch using a new AgentExecutor instance or ensure execute is re-entrant and thread-safe
-                // For simplicity, let's assume execute can be called, but be mindful of shared state if not designed for it.
-                // If AgentExecutor itself has shared mutable state beyond the nodes/routers maps (which are read-only during execute),
-                // you might need a new executor instance per branch or a different approach.
-                // For now, we'll call execute on the same instance. This implies that the 'nodes' and 'routers' maps are
-                // populated before any parallel execution and are not modified during it.
-                // The agentStateRepository will be shared, which is generally fine for Redis/DB backed ones.
-                return execute(branchState, workflowConfig); 
+                log.debug("executeParallel: Processing node {} in a new branch. Initial branch state tenant: {}, thread: {}", targetNodeName, branchState.getTenantId(), branchState.getThreadId());
+                // Solo procesa este nodo específico, no un sub-workflow.
+                AgentState processedBranchState = targetNode.process(branchState, workflowConfig);
+                log.debug("executeParallel: Node {} processed in branch. Final branch state tenant: {}, thread: {}", targetNodeName, processedBranchState.getTenantId(), processedBranchState.getThreadId());
+                return processedBranchState; 
             }, executorService);
             
             futures.add(future);
         }
         
-        // Wait for all branches to complete
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         
-        // Merge the results
+        log.debug("executeParallel: All parallel branches completed. Merging results into state for tenant: {}, thread: {}", state.getTenantId(), state.getThreadId());
         for (CompletableFuture<AgentState> future : futures) {
             try {
-                AgentState branchState = future.get();
-                // Merge branch state with the main state
+                AgentState branchState = future.get(); 
                 if (branchState != null) {
                     // Merge values
                     if (branchState.getKeys() != null && !branchState.getKeys().isEmpty()) {
                         for (String key : branchState.getKeys()) {
                             Object value = branchState.get(key);
                             if (value != null) {
-                                state.set(key, value);
+                                if (key.equals("execution_path") && value instanceof List) {
+                                    @SuppressWarnings("unchecked")
+                                    List<String> mainPath = (List<String>) state.get(key);
+                                    if (mainPath == null) { 
+                                        mainPath = new ArrayList<>();
+                                        state.set(key, mainPath);
+                                    }
+                                    @SuppressWarnings("unchecked")
+                                    List<String> branchPath = (List<String>) value;
+                                    for (String pathItem : branchPath) {
+                                        if (!mainPath.contains(pathItem)) { 
+                                            mainPath.add(pathItem);
+                                        }
+                                    }
+                                } else {
+                                    state.set(key, value);
+                                }
                             }
                         }
                     }
