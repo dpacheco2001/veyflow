@@ -144,16 +144,31 @@ initialState.save();
 // 4. Definir Nodos y el Workflow
 // Suponiendo que tienes una implementación de AgentNode llamada EchoNode
 // public class EchoNode implements AgentNode { /* ... implementación ... */ }
-AgentNode echoNode = new EchoNode("echo1"); // Suponiendo que EchoNode toma un nombre/ID
-CompileConfig compileConfig = new CompileConfig(PersistenceMode.IN_MEMORY, agentStateRepository, workflowConfigRepository);
+AgentNode entryEcho = new EchoNode("entryMessageNode"); 
+AgentNode toolAgentNode = new MyCustomToolAgentNode("toolAgentNode", /*...toolAgentInstance...*/, "System prompt", ModelParameters.defaults()); // Asumiendo MyCustomToolAgentNode
+AgentNode exitEcho = new EchoNode("exitMessageNode");
 
-AgentWorkflow workflow = AgentWorkflow.builder()
-    .addNode(echoNode)
-    // .setInitialInputMapping(Map.of("echo1_input", "initialState")) // El mapeo de entrada puede ser más granular o no necesario si el nodo toma AgentState directamente
-    .setCompileConfig(compileConfig)
-    .build();
+AgentWorkflow workflow = new AgentWorkflow("entryMessageNode", agentStateRepository); // Nodo de entrada y repositorio
+workflow.addNode(entryEcho);
+workflow.addNode(toolAgentNode);
+workflow.addNode(exitEcho);
 
-// ... el resto del ejemplo ...
+workflow.addEdge("entryMessageNode", "toolAgentNode");
+workflow.addEdge("toolAgentNode", "exitMessageNode");
+
+// 5. Compilar el Workflow
+CompileConfig compileConfig = CompileConfig.builder().build(); // Configuración de compilación
+CompiledWorkflow compiledWorkflow = workflow.compile(compileConfig);
+
+// 6. Ejecutar el Workflow
+AgentState finalState = compiledWorkflow.execute(initialState, wfConfig);
+
+// 7. Verificar Resultados (ejemplo)
+System.out.println("Estado final del agente: " + finalState.getData());
+System.out.println("Historial de chat final: " + finalState.getChatMessages());
+
+// Asegúrate de tener las implementaciones de EchoNode y MyCustomToolAgentNode disponibles
+// y de inicializar toolAgentInstance adecuadamente si MyCustomToolAgentNode lo requiere.
 ```
 
 ## Creación de Nodos Personalizados
@@ -284,7 +299,7 @@ Estos identificadores son luego utilizados por las implementaciones de `AgentSta
 *   **Gestión del Historial de Chat:**
     *   `void addMessage(ChatMessage message)`: Añade un único `ChatMessage` al final del historial de la conversación.
         ```java
-        agentState.addMessage(ChatMessage.builder().role(ChatMessage.Role.USER).content("Hola, ¿cómo estás?").build());
+        agentState.addMessage(ChatMessage.builder().role(Role.USER).content("Hola, ¿cómo estás?").build());
         ```
     *   `void addMessages(List<ChatMessage> messages)`: Añade una lista de `ChatMessage` al historial.
     *   `List<ChatMessage> getChatMessages()`: Devuelve una copia de la lista de todos los mensajes de chat almacenados, manteniendo el orden cronológico.
@@ -296,6 +311,7 @@ Estos identificadores son luego utilizados por las implementaciones de `AgentSta
     *   `PersistenceMode getPersistenceMode()`: Devuelve el modo de persistencia configurado para este `AgentState`.
 
 Estas funcionalidades permiten a los nodos y servicios de Veyflow leer, escribir y modificar el contexto de un agente de manera flexible a lo largo de la ejecución de un workflow.
+
 ## Configuración de Workflows (WorkflowConfig)
 
 `com.veyon.veyflow.config.WorkflowConfig` permite configurar aspectos específicos de la ejecución de un workflow, como:
@@ -309,13 +325,11 @@ Estas funcionalidades permiten a los nodos y servicios de Veyflow leer, escribir
 // Por ejemplo, si AgentState usa "acme_corp", WorkflowConfig también debe usar "acme_corp".
 WorkflowConfig workflowConfig = new WorkflowConfig("acme_corp", PersistenceMode.IN_MEMORY);
 
-
-// Ejemplo de cómo se podrían activar métodos específicos de un servicio:
+// Activar herramientas específicas (opcional, si el workflow usa ToolAgent)
 workflowConfig.activateToolMethod(MyCalculatorService.class.getSimpleName(), "add");
 workflowConfig.activateToolMethod(MyCalculatorService.class.getSimpleName(), "subtract");
+```
 
-// Alternativamente, si se quisiera activar todos los métodos de un servicio registrado:
-// workflowConfig.activateToolService(MyCalculatorService.class.getSimpleName());
 ## Integración y Uso de Herramientas
 
 1.  **Crear un `ToolService`**:
@@ -468,15 +482,12 @@ MyCustomToolAgentNode entryNode = new MyCustomToolAgentNode("inputNode", toolAge
 AnotherCustomNode processingNode = new AnotherCustomNode("processor");
 FinalNode outputNode = new FinalNode("outputGenerator");
 
-// 2. Crear el AgentWorkflow, especificando el nombre del nodo de entrada
-AgentWorkflow workflow = new AgentWorkflow(entryNode.getName());
-
-// 3. Añadir todos los nodos al workflow
+// 2. Crear el AgentWorkflow, especificando el nodo de entrada y el repositorio
+AgentWorkflow workflow = new AgentWorkflow(entryNode.getName(), agentStateRepository); // Nodo de entrada y repositorio
 workflow.addNode(entryNode);
 workflow.addNode(processingNode);
 workflow.addNode(outputNode);
 
-// 4. Definir las rutas (edges y routers) entre los nodos
 workflow.addEdge(entryNode.getName(), processingNode.getName()); // entryNode -> processingNode
 workflow.addRouter(processingNode.getName(), new ConditionalRouter((state, config) -> {
     if ("data_ok".equals(state.get("status"))) {
@@ -487,6 +498,9 @@ workflow.addRouter(processingNode.getName(), new ConditionalRouter((state, confi
 
 // Compilar y ejecutar...
 ```
+
+**Nota Importante sobre `AgentStateRepository`**:
+El `AgentWorkflow` siempre necesita una instancia de `AgentStateRepository` para gestionar el estado del agente. Si se utiliza el constructor `public AgentWorkflow(String entryNode)`, se creará automáticamente un `InMemoryAgentStateRepository` por defecto. Para utilizar un repositorio diferente (por ejemplo, para persistencia con Redis), debes instanciarlo y pasarlo explícitamente al constructor `public AgentWorkflow(String entryNode, AgentStateRepository agentStateRepository)`, como se muestra en el ejemplo anterior. Este repositorio es utilizado por el `AgentExecutor` subyacente para cargar y guardar el estado según sea necesario, incluso si el modo de persistencia es solo en memoria.
 
 ### 2. Configuración del Workflow (`WorkflowConfig`)
 
@@ -511,7 +525,8 @@ workflowConfig.activateToolMethod(MyCalculatorService.class.getSimpleName(), "su
 Una vez definido, el `AgentWorkflow` debe ser compilado. Este paso valida la estructura del grafo, resuelve las rutas y prepara un `CompiledWorkflow` ejecutable.
 
 ```java
-CompiledWorkflow compiledWorkflow = workflow.compile();
+CompileConfig compileConfig = CompileConfig.builder().build(); // Configuración de compilación
+CompiledWorkflow compiledWorkflow = workflow.compile(compileConfig);
 ```
 Si hay problemas en la definición del grafo (ej. rutas paralelas que no convergen), la compilación fallará.
 
