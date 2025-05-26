@@ -8,6 +8,7 @@ import com.veyon.veyflow.foundationmodels.OpenAIModelService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,6 +18,13 @@ import com.veyon.veyflow.core.ToolAgent;
 import com.veyon.veyflow.config.WorkflowConfig;
 import com.veyon.veyflow.core.AgentTurnResult;
 import com.veyon.veyflow.core.LLM;
+import com.veyon.veyflow.core.AgentExecutor;
+import com.veyon.veyflow.core.AgentNode;
+import com.veyon.veyflow.routing.LinearRouter;
+import com.veyon.veyflow.state.RedisAgentStateRepository;
+import com.veyon.veyflow.state.PersistenceMode;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.api.StatefulRedisConnection;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.Arrays;
+import java.util.Optional;
 
 import com.veyon.veyflow.state.ChatMessage;
 
@@ -230,5 +239,118 @@ public class AgentConversationTest {
             }
         }
 
+    }
+
+    @Test
+    public void testSimpleWorkflowWithRedisPersistence() {
+        // 1. Configuración Inicial
+        String uniqueTestTenantId = "test-tenant-redis-" + System.currentTimeMillis();
+        String uniqueTestThreadId = "test-thread-redis-" + System.currentTimeMillis();
+
+        RedisClient testRedisClient = null;
+        RedisAgentStateRepository testRedisRepo = null;
+        StatefulRedisConnection<String, String> redisConnection = null;
+
+        try {
+            testRedisClient = RedisClient.create("redis://localhost:6379"); // Asegúrate que Redis corre aquí
+            redisConnection = testRedisClient.connect(); // Keep for cleanup
+            testRedisRepo = new RedisAgentStateRepository("redis://localhost:6379"); // Corrected constructor
+
+            // 2. Definir un Nodo LLM Simple
+            class SimpleLLMNode implements AgentNode {
+                private final LLM llm;
+                private final String modelName = OPENAI_MODEL_FOR_NODE; // Usar el modelo definido en la clase
+                private final String nodeName = "SimpleLLMNode";
+
+                public SimpleLLMNode(FoundationModelService fms) {
+                    this.llm = new LLM(fms, modelName);
+                }
+
+                @Override
+                public String getName() { // Implemented getName
+                    return nodeName;
+                }
+
+                @Override
+                public AgentState process(AgentState state) {
+                    System.out.println(ANSI_BLUE + "--- SimpleLLMNode processing --- " + ANSI_RESET);
+                    String userInput = state.get("userInput");
+                    if (userInput == null) {
+                        userInput = "Tell me a fun fact."; // Default input
+                    }
+                    
+                    AgentTurnResult llmResult = llm.execute(
+                        state, 
+                        userInput, 
+                        "You are a helpful test assistant.", 
+                        null
+                    );
+                    // LLM.execute ya actualiza el state con los mensajes, así que no necesitamos hacer state.addChatMessage manualmente aquí
+                    // para los mensajes de la interacción con el LLM.
+                    state.set("llm_response", llmResult.getFinalMessage());
+                    System.out.println(ANSI_GREEN + "LLM Node processed. Response: " + llmResult.getFinalMessage() + ANSI_RESET);
+                    return state;
+                }
+            }
+
+            // 3. Configurar AgentExecutor
+            AgentExecutor agentExecutor = new AgentExecutor("SimpleLLMNode", testRedisRepo); // Use actual node name
+            agentExecutor.registerNode(new SimpleLLMNode(foundationModelService)); // Corrected registerNode call
+            // No router registered for SimpleLLMNode, making it a terminal node by default
+
+            // 4. Crear AgentState Inicial
+            AgentState initialState = new AgentState(uniqueTestTenantId, uniqueTestThreadId);
+            initialState.setPersistenceMode(PersistenceMode.REDIS);
+            initialState.set("userInput", "Hello Veyon, tell me about AI."); // Changed setValue to set
+            initialState.addChatMessage(new ChatMessage(ChatMessage.Role.USER, "Hello Veylon, tell me about AI.")); // Añadir también al historial explícitamente si el LLM lo espera
+
+            System.out.println(ANSI_BLUE + "--- Executing AgentExecutor --- " + ANSI_RESET);
+            // 5. Ejecutar el Workflow
+            AgentState finalState = agentExecutor.execute(initialState);
+            assertNotNull(finalState, "Final state from executor should not be null");
+
+            // 6. Verificar la Persistencia en Redis
+            System.out.println(ANSI_BLUE + "--- Verifying Redis Persistence --- " + ANSI_RESET);
+            Optional<AgentState> optionalRetrievedState = testRedisRepo.findById(uniqueTestTenantId, uniqueTestThreadId);
+            assertTrue(optionalRetrievedState.isPresent(), "State should be present in Redis after execution.");
+            AgentState retrievedStateFromRedis = optionalRetrievedState.get();
+
+            // assertNotNull(retrievedStateFromRedis, "State retrieved from Redis should not be null."); // Covered by isPresent and get
+            assertEquals(PersistenceMode.REDIS, retrievedStateFromRedis.getPersistenceMode(), "PersistenceMode in Redis should be REDIS.");
+            assertEquals(uniqueTestTenantId, retrievedStateFromRedis.getTenantId(), "TenantId should match.");
+            assertEquals(uniqueTestThreadId, retrievedStateFromRedis.getThreadId(), "ThreadId should match.");
+
+            // Verificar que la conversación con el LLM está en el estado de Redis
+            assertFalse(retrievedStateFromRedis.getChatMessages().isEmpty(), "Chat history in Redis should not be empty.");
+            
+            boolean assistantMessageFound = false;
+            for(ChatMessage msg : retrievedStateFromRedis.getChatMessages()) {
+                System.out.println("Redis Chat: " + msg.getRole() + ": " + msg.getContent());
+                if (msg.getRole() == ChatMessage.Role.ASSISTANT && msg.getContent() != null && !msg.getContent().isEmpty()) {
+                    assistantMessageFound = true;
+                    break;
+                }
+            }
+            assertTrue(assistantMessageFound, "Assistant message should be present in chat history from Redis.");
+            assertNotNull(retrievedStateFromRedis.get("llm_response"), "LLM response should be in Redis state values.");
+
+            System.out.println(ANSI_GREEN + "Redis persistence test successful!" + ANSI_RESET);
+
+        } finally {
+            // 7. Limpieza
+            if (redisConnection != null) {
+                try {
+                    String redisKey = "agent_state:" + uniqueTestTenantId + ":" + uniqueTestThreadId;
+                    System.out.println(ANSI_BLUE + "--- Cleaning up Redis key: " + redisKey + " --- " + ANSI_RESET);
+                    redisConnection.sync().del(redisKey);
+                    redisConnection.close();
+                } catch (Exception e) {
+                    log.warn("Could not clean up Redis key for tenant {} and thread {}: {}", uniqueTestTenantId, uniqueTestThreadId, e.getMessage());
+                }
+            }
+            if (testRedisClient != null) {
+                testRedisClient.shutdown();
+            }
+        }
     }
 }

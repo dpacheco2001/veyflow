@@ -1,5 +1,10 @@
 package com.veyon.veyflow.core;
+
 import com.veyon.veyflow.state.AgentState;
+import com.veyon.veyflow.state.AgentStateRepository;
+import com.veyon.veyflow.state.InMemoryAgentStateRepository;
+import com.veyon.veyflow.state.PersistenceMode;
+import com.veyon.veyflow.state.ChatMessage;
 import com.veyon.veyflow.routing.NodeRouter;
 
 import java.util.Map;
@@ -21,20 +26,32 @@ public class AgentExecutor {
     private static final Logger log = LoggerFactory.getLogger(AgentExecutor.class);
     
     private final Map<String, AgentNode> nodes;
-    private final Map<String, NodeRouter> routers;
+    private final Map<String, List<NodeRouter>> routers;
     private final String entryNode;
     private final ExecutorService executorService;
+    private final AgentStateRepository agentStateRepository;
     
     /**
-     * Create a new agent executor.
+     * Create a new agent executor with a specific state repository.
      * 
      * @param entryNode The name of the entry node
+     * @param agentStateRepository The repository for saving/loading agent state
      */
-    public AgentExecutor(String entryNode) {
+    public AgentExecutor(String entryNode, AgentStateRepository agentStateRepository) {
         this.nodes = new HashMap<>();
         this.routers = new HashMap<>();
         this.entryNode = entryNode;
         this.executorService = Executors.newCachedThreadPool();
+        this.agentStateRepository = agentStateRepository;
+    }
+
+    /**
+     * Create a new agent executor with a default InMemoryAgentStateRepository.
+     * 
+     * @param entryNode The name of the entry node
+     */
+    public AgentExecutor(String entryNode) {
+        this(entryNode, new InMemoryAgentStateRepository());
     }
     
     /**
@@ -56,7 +73,7 @@ public class AgentExecutor {
      * @return This executor instance for chaining
      */
     public AgentExecutor registerRouter(String nodeName, NodeRouter router) {
-        routers.put(nodeName, router);
+        this.routers.computeIfAbsent(nodeName, k -> new ArrayList<>()).add(router);
         return this;
     }
     
@@ -85,28 +102,55 @@ public class AgentExecutor {
             // Process the current node
             state = currentNode.process(state);
             
-            // Route to the next node
-            NodeRouter router = routers.get(currentNodeName);
-            if (router == null) {
-                // No router means this is a terminal node
-                log.debug("Terminal node reached: {}", currentNodeName);
+            // Get all routers for the current node
+            List<NodeRouter> currentRouters = routers.get(currentNodeName);
+            
+            if (currentRouters == null || currentRouters.isEmpty()) {
+                // No routers means this is a terminal node for this path
+                log.debug("Terminal node reached or no routers defined for: {}", currentNodeName);
                 break;
             }
             
-            // Determine the next node
-            String nextNodeName = router.route(state);
+            List<String> nextNodeNames = new ArrayList<>();
+            for (NodeRouter router : currentRouters) {
+                String nextNodeCandidate = router.route(state);
+                if (nextNodeCandidate != null && !nextNodeCandidate.isEmpty()) {
+                    nextNodeNames.add(nextNodeCandidate);
+                }
+            }
             
-            if (nextNodeName == null || nextNodeName.isEmpty()) {
-                // No next node, so we're done
-                log.debug("No next node from node: {}", currentNodeName);
+            if (nextNodeNames.isEmpty()) {
+                // No next node from any router, so we're done with this path
+                log.debug("No valid next node from any router for node: {}", currentNodeName);
                 break;
-            } else {
-                // Update the current node
-                log.debug("Routing from {} to {}", currentNodeName, nextNodeName);
+            } else if (nextNodeNames.size() == 1) {
+                // Single next node, continue linearly
+                String nextNodeName = nextNodeNames.get(0);
+                log.debug("Routing from {} to {} (linear)", currentNodeName, nextNodeName);
                 state.setCurrentNode(nextNodeName);
+            } else {
+                // Multiple next nodes, execute in parallel
+                log.info("Forking parallel execution from {} to nodes: {}", currentNodeName, nextNodeNames);
+                executeParallel(state, nextNodeNames.toArray(new String[0]));
+                break; // Stop current linear execution as it has forked
             }
         }
         
+        // After the loop, workflow execution is complete or has been interrupted.
+        // Save the state if it's configured for REDIS persistence and a repository is available.
+        if (this.agentStateRepository != null && state.getPersistenceMode() == PersistenceMode.REDIS) {
+            log.info("Workflow finished for tenant '{}', thread '{}'. Saving state to repository.", state.getTenantId(), state.getThreadId());
+            try {
+                this.agentStateRepository.save(state);
+            } catch (Exception e) {
+                log.error("Failed to save state for tenant '{}', thread '{}' to repository after workflow completion.", 
+                          state.getTenantId(), state.getThreadId(), e);
+            }
+        } else if (this.agentStateRepository == null && state.getPersistenceMode() == PersistenceMode.REDIS) {
+            log.warn("AgentState persistenceMode is REDIS, but no AgentStateRepository is configured in AgentExecutor for tenant '{}', thread '{}'. State not saved.",
+                     state.getTenantId(), state.getThreadId());
+        }
+
         return state;
     }
     
@@ -127,8 +171,14 @@ public class AgentExecutor {
                 AgentState branchState = AgentState.fromJson(state.toJson());
                 branchState.setCurrentNode(targetNode);
                 
-                // Execute this branch
-                return execute(branchState);
+                // Execute this branch using a new AgentExecutor instance or ensure execute is re-entrant and thread-safe
+                // For simplicity, let's assume execute can be called, but be mindful of shared state if not designed for it.
+                // If AgentExecutor itself has shared mutable state beyond the nodes/routers maps (which are read-only during execute),
+                // you might need a new executor instance per branch or a different approach.
+                // For now, we'll call execute on the same instance. This implies that the 'nodes' and 'routers' maps are
+                // populated before any parallel execution and are not modified during it.
+                // The agentStateRepository will be shared, which is generally fine for Redis/DB backed ones.
+                return execute(branchState); 
             }, executorService);
             
             futures.add(future);
@@ -142,12 +192,28 @@ public class AgentExecutor {
             try {
                 AgentState branchState = future.get();
                 // Merge branch state with the main state
-                // This is a simple implementation; you might want to customize this
-                for (String key : branchState.getKeys()) {
-                    state.set(key, branchState.get(key));
+                if (branchState != null) {
+                    // Merge values
+                    if (branchState.getKeys() != null && !branchState.getKeys().isEmpty()) {
+                        for (String key : branchState.getKeys()) {
+                            Object value = branchState.get(key);
+                            if (value != null) {
+                                state.set(key, value);
+                            }
+                        }
+                    }
+                    // Merge chat messages (simple append)
+                    if (branchState.getChatMessages() != null) {
+                        for (ChatMessage msg : branchState.getChatMessages()) {
+                            state.addChatMessage(msg);
+                        }
+                    }
+                    // Note: Merging currentNode, previousNode, threadId, tenantId might not always make sense
+                    // or require specific logic if branches can diverge significantly and then try to merge back
+                    // into a single conceptual state for these properties. For now, we only merge 'values' and 'chatMessages'.
                 }
             } catch (Exception e) {
-                log.error("Error executing parallel branch", e);
+                log.error("Error merging parallel branch execution result", e);
             }
         }
     }

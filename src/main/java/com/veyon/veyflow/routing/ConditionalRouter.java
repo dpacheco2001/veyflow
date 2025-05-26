@@ -1,49 +1,40 @@
 package com.veyon.veyflow.routing;
 
 import com.veyon.veyflow.state.AgentState;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.function.Predicate;
+import java.util.function.Function;
 
 /**
- * A router that routes to different target nodes based on conditions.
+ * A router that determines the next node by executing a provided function 
+ * with the current agent state.
  */
 public class ConditionalRouter implements NodeRouter {
-    private final Map<Predicate<AgentState>, String> conditions;
-    private final String defaultTarget;
+    private final Function<AgentState, String> conditionFunction;
     
     /**
-     * Create a new conditional router.
+     * Create a new conditional router that uses a function to determine the next node.
      * 
-     * @param defaultTarget The default target node if no conditions match
+     * @param conditionFunction A function that takes the AgentState and returns the name 
+     *                          of the next node, or null if routing should stop.
+     * @throws IllegalArgumentException if conditionFunction is null.
      */
-    public ConditionalRouter(String defaultTarget) {
-        this.conditions = new HashMap<>();
-        this.defaultTarget = defaultTarget;
+    public ConditionalRouter(Function<AgentState, String> conditionFunction) {
+        if (conditionFunction == null) {
+            throw new IllegalArgumentException("Condition function cannot be null.");
+        }
+        this.conditionFunction = conditionFunction;
     }
     
     /**
-     * Add a condition for routing.
+     * Routes from the current node based on the provided condition function.
      * 
-     * @param condition The condition predicate
-     * @param targetNode The target node if the condition is true
-     * @return This router instance for chaining
+     * @param state The current agent state.
+     * @return The name of the next node as determined by the condition function, 
+     *         or null if the function returns null or an empty string.
      */
-    public ConditionalRouter addCondition(Predicate<AgentState> condition, String targetNode) {
-        conditions.put(condition, targetNode);
-        return this;
-    }
-    
     @Override
     public String route(AgentState state) {
-        // Check each condition and route accordingly
-        for (Map.Entry<Predicate<AgentState>, String> entry : conditions.entrySet()) {
-            if (entry.getKey().test(state)) {
-                return entry.getValue(); // Return target node on first match
-            }
-        }
-        
-        // Use default target if no conditions match
-        return defaultTarget;
+        String nextNode = this.conditionFunction.apply(state);
+        // AgentExecutor already handles null or empty string as a terminal signal for a path
+        return nextNode; 
     }
 }

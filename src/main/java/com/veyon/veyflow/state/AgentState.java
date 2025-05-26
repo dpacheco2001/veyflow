@@ -18,6 +18,7 @@ public class AgentState {
     private String previousNode;
     private String threadId;
     private String tenantId;
+    private PersistenceMode persistenceMode;
 
     /**
      * Creates a new empty agent state.
@@ -29,6 +30,7 @@ public class AgentState {
         this.previousNode = "";
         this.tenantId = "";
         this.threadId = "";
+        this.persistenceMode = PersistenceMode.IN_MEMORY;
     }
 
     /**
@@ -50,6 +52,18 @@ public class AgentState {
     public AgentState(String tenantId, String threadId) {
         this(tenantId);
         this.threadId = (threadId == null) ? "" : threadId;
+    }
+
+    /**
+     * Creates a new agent state with tenant ID, thread ID, and persistence mode.
+     *
+     * @param tenantId The tenant ID
+     * @param threadId The thread ID for this state instance
+     * @param persistenceMode The persistence mode for this state instance
+     */
+    public AgentState(String tenantId, String threadId, PersistenceMode persistenceMode) {
+        this(tenantId, threadId);
+        this.persistenceMode = persistenceMode;
     }
 
     /**
@@ -173,6 +187,26 @@ public class AgentState {
      */
     public AgentState setTenantId(String tenantId) {
         this.tenantId = tenantId;
+        return this;
+    }
+
+    /**
+     * Get the persistence mode.
+     * 
+     * @return Persistence mode
+     */
+    public PersistenceMode getPersistenceMode() {
+        return persistenceMode;
+    }
+
+    /**
+     * Set the persistence mode.
+     * 
+     * @param persistenceMode Persistence mode
+     * @return This state instance for chaining
+     */
+    public AgentState setPersistenceMode(PersistenceMode persistenceMode) {
+        this.persistenceMode = persistenceMode;
         return this;
     }
 
