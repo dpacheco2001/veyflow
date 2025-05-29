@@ -16,6 +16,7 @@ public class RedisWorkflowConfigRepository implements WorkflowConfigRepository {
 
     private static final Logger log = LoggerFactory.getLogger(RedisWorkflowConfigRepository.class);
     private static final String KEY_PREFIX = "veyflow:workflow_config:";
+    private static final long TTL_SECONDS = 600; 
     private final StatefulRedisConnection<String, String> connection;
     private final Gson gson;
 
@@ -40,7 +41,7 @@ public class RedisWorkflowConfigRepository implements WorkflowConfigRepository {
         String key = getKey(config.getTenantId());
         String json = gson.toJson(config);
         try {
-            commands.set(key, json);
+            commands.setex(key, TTL_SECONDS, json);
             log.debug("Saved WorkflowConfig for key: {}", key);
         } catch (Exception e) {
             log.error("Error saving WorkflowConfig to Redis for key {}: {}", key, e.getMessage(), e);
